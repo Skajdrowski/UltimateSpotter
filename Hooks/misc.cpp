@@ -78,13 +78,21 @@ void __fastcall AutoBalanceUpdate_Detour(void* funcPtr, void* /*edx*/)
     return;
 }
 
-constexpr size_t configSize = 0x5F5;
+constexpr uint16_t serverOptionsSize = 0x5F4;
+constexpr uintptr_t menuOptionsAddress = 0x7C3958;
+constexpr uintptr_t loadMenuVtable = 0x706738;
+constexpr uintptr_t saveMenuVtable = 0x706C60;
+constexpr uintptr_t mapListCommitAddress = 0x4BA1C0;
+
+using MapListCommitFn = void* (__thiscall*)(void* thisPtr);
+static MapListCommitFn mapListCommit = nullptr;
+
 static std::wstring bytes_to_hex(const uint8_t* data, size_t size)
 {
     static constexpr wchar_t kHex[] = L"0123456789ABCDEF";
     std::wstring out;
     out.resize(size * 2);
-    for (size_t i = 0; i < size; ++i)
+    for (size_t i = 0; i < size; i++)
     {
         const uint8_t b = data[i];
         out[i * 2 + 0] = kHex[b >> 4];
@@ -132,51 +140,59 @@ static void readLobbyConfig(uint8_t* cfg)
         return;
 
     std::vector<wchar_t> buf;
-    buf.resize(configSize * 2 + 4);
+    buf.resize(serverOptionsSize * 2 + 2);
     const DWORD read = GetPrivateProfileStringW(L"LOBBY", ConfigKey, L"", buf.data(), static_cast<DWORD>(buf.size()), iniPath);
-    if (read != 0)
-    {
-        std::vector<uint8_t> parsed;
-        if (hex_to_bytes(buf.data(), parsed, configSize))
-        {
-            memcpy(cfg, parsed.data(), configSize);
-#ifdef DEBUG_LOGGING
-            printf("config loaded\n");
-#endif
-        }
-    }
-}
-
-static void saveLobbyConfig(uint8_t* cfg)
-{
-    if (!cfg)
+    if (read == 0)
         return;
 
-    const std::wstring hex = bytes_to_hex(cfg, configSize);
-    WritePrivateProfileStringW(L"LOBBY", ConfigKey, hex.c_str(), iniPath);
+    std::vector<uint8_t> parsed;
+    if (!hex_to_bytes(buf.data(), parsed, serverOptionsSize))
+        return;
+
+    memcpy(cfg, parsed.data(), serverOptionsSize);
+    cfg[serverOptionsSize] = 0;
 #ifdef DEBUG_LOGGING
-    printf("config saved\n");
+    printf("multiplayer lobby config loaded\n");
 #endif
+}
+
+static bool saveLobbyConfig(const uint8_t* cfg)
+{
+    if (!cfg)
+        return false;
+
+    const std::wstring hex = bytes_to_hex(cfg, serverOptionsSize);
+    if (!WritePrivateProfileStringW(L"LOBBY", ConfigKey, hex.c_str(), iniPath))
+        return false;
+#ifdef DEBUG_LOGGING
+    printf("multiplayer lobby config saved\n");
+#endif
+    return true;
+}
+
+static void* __fastcall MapListCommit_Detour(void* thisPtr, void* /*edx*/)
+{
+    void* const committedOptions = mapListCommit(thisPtr);
+    if (committedOptions)
+        saveLobbyConfig(reinterpret_cast<const uint8_t*>(committedOptions));
+
+    return committedOptions;
 }
 
 static int __fastcall LobbyTemplateCopy_Detour(void* thisPtr, void* edx, void* src)
 {
     const int og = lobbyTemplateCopy(thisPtr, src);
 
-    if (thisPtr == reinterpret_cast<void*>(0x7C3958))
+    if (thisPtr == reinterpret_cast<void*>(menuOptionsAddress))
     {
         uint8_t* data = reinterpret_cast<uint8_t*>(thisPtr);
 
-        if (edx == reinterpret_cast<void*>(0x706738))
+        if (edx == reinterpret_cast<void*>(loadMenuVtable))
             readLobbyConfig(data);
 
-        if (edx == reinterpret_cast<void*>(0x706C60))
-        {
-            saveLobbyConfig(data);
+        if (edx == reinterpret_cast<void*>(saveMenuVtable) && saveLobbyConfig(data))
             listMaps();
-        }
     }
-
     return og;
 }
 
@@ -196,4 +212,7 @@ void hookMisc()
 
     MH_CreateHook(reinterpret_cast<void*>(LobbyTemplateCopyAddr),
         LobbyTemplateCopy_Detour, reinterpret_cast<void**>(&lobbyTemplateCopy));
+
+    MH_CreateHook(reinterpret_cast<void*>(mapListCommitAddress),
+        MapListCommit_Detour, reinterpret_cast<void**>(&mapListCommit));
 }

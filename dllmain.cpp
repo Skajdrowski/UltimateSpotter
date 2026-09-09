@@ -76,13 +76,13 @@ static void Init()
     if (MH_Initialize() != MH_OK)
         return;
 
+    config_init();
     hookMisc();
     hookPlayers();
     hookInvs();
     hookSpawns();
 
     MH_EnableHook(MH_ALL_HOOKS);
-    config_init();
     InstallDirect3DHook();
     CreateThread(nullptr, 0, reinterpret_cast<LPTHREAD_START_ROUTINE>(Thread), nullptr, 0, nullptr);
     wsprintfW(greetBuffer, L"Host currently not in-game");
