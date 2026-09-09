@@ -128,23 +128,25 @@ uint32_t __cdecl PlayerFetch_Detour(Fetch* fetchStruct)
 }
 
 const std::vector<playerCoords> karlshorstOOBs = {
-    { -120.52f, -2.44f, -22.8f }, { -119.5f, -1.3f, 4.2f }, // Sewers
+    { -120.52f, -2.44f, -22.8f  }, { -119.5f, -1.3f, 4.2f  }, // Sewers
     { -239.8f, -2.625f, 149.85f }, { -212.4f, -1.5f, 157.f }, // Lifting barrier
-    { -104.35f, -1.35f, 4.7f }, { -101.f, -0.2f, 7.f }, // A hole in the wall, near Sewers
-    { -183.f, -10.55f, -41.f }, { -179.5f, -5.f, -26.6f } // Broken ceiling
+    { -104.35f, -1.35f, 4.7f    }, { -101.f, -0.2f, 7.f    }, // A hole in the wall, near Sewers
+    { -183.f, -10.55f, -41.f    }, { -179.5f, -5.f, -26.6f } // Broken ceiling
 };
 const std::vector<playerCoords> safehouseOOBs = {
-    { -55.7f, -3.85f, 71.f }, { -53.1f, 2.f, 72.1f }, // Broken window
+    { -55.7f, -3.85f, 71.f }, { -53.1f, 2.f, 72.1f   }, // Broken window
     { -52.6f, 0.84f, 48.7f }, { -49.1f, 2.2f, 62.83f }, // Entrance's roof to the safehouse
-    { -44.f, 5.2f, -33.7f }, { -34.7f, 8.1f, -29.5f } // Barrier with laying steel beam
+    { -44.f, 5.2f, -33.7f  }, { -34.7f, 8.1f, -29.5f } // Barrier with laying steel beam
 };
 const std::vector<playerCoords> missingContactOOBs = {
     { -105.f, -2.9f, -142.5f }, { -102.f, -1.2f, -140.4f } // Lifting barrier
 };
 const std::vector<playerCoords> ubahnOOBs = {
     { 30.41f, -5.4f, 5.28f }, { 35.75f, -4.12f, 9.8f }, // Neighbor room with invisible indoor walls
-    { -46.2f, -1.34f, 48.f }, { -17.5f, 0.f, 80.f }, // Right side from the roof spawn near railings
-    { 9.4f, -2.51f, -130.f }, { 30.9f, 0.f, -127.f } // Barrier connected with stone fence
+    { -53.f, -13.5f, 40.f  }, { -91.63f, 0.f, 13.3f  }, // Left side from the roof spawn on the other side of barricade
+    { -46.2f, -1.34f, 48.f }, { -17.5f, 0.f, 80.f    }, // Right side from the roof spawn near railings
+    { -50.5f, -2.f, -86.1f }, { -60.f, -10.f, -97.8f }, // Building with invisible walls, next to the left from roof spawn
+    { 9.4f, -2.51f, -130.f }, { 30.9f, 0.f, -127.f   } // Barrier connected with stone fence
 };
 const std::vector<playerCoords> holzmarktOOBs = {
     { -78.9f, -3.f, 7.8f }, { -75.5f, -0.2f, 4.9f } // Lifting barrier near sewers
