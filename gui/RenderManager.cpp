@@ -1,16 +1,24 @@
-#include <cmath>
 #include "RenderManager.h"
+
+namespace
+{
+    struct CustomVertex
+    {
+        FLOAT x, y, z, rhw;
+        DWORD color;
+    };
+
+    constexpr DWORD kCustomVertexFvf = D3DFVF_XYZRHW | D3DFVF_DIFFUSE;
+}
 
 namespace Render
 {
 	namespace Fonts
 	{
-		LPD3DXFONT Default;
 		LPD3DXFONT Menu;
 		LPD3DXFONT MenuBold;
 		LPD3DXFONT MenuText;
 		LPD3DXFONT MenuTabs;
-		LPD3DXFONT Clock;
 		LPD3DXFONT Tabs;
 	};
 };
@@ -48,12 +56,10 @@ namespace
 
 void Render::Initialise(LPDIRECT3DDEVICE8 pDevice)
 {
-    Fonts::Default = CreateFontHandle(pDevice, 14, 0, FW_NORMAL, FALSE, "Arial");
     Fonts::Menu = CreateFontHandle(pDevice, 24, 0, FW_NORMAL, FALSE, "DINPro-Regular");
     Fonts::MenuBold = CreateFontHandle(pDevice, 15, 0, FW_BOLD, FALSE, "Courier New");
     Fonts::MenuText = CreateFontHandle(pDevice, 18, 0, FW_NORMAL, FALSE, "Calibri");
     Fonts::MenuTabs = CreateFontHandle(pDevice, 18, 0, FW_BOLD, FALSE, "Arial");
-    Fonts::Clock = CreateFontHandle(pDevice, 22, 0, FW_BOLD, FALSE, "Arial");
     Fonts::Tabs = CreateFontHandle(pDevice, 28, 0, FW_BOLD, FALSE, "Arial");
 }
 
@@ -65,7 +71,7 @@ void Render::Draw(LPDIRECT3DDEVICE8 pDevice, int x, int y, int w, int h, D3DCOLO
 
 void Render::Outline(LPDIRECT3DDEVICE8 pDevice, int x, int y, int w, int h, D3DCOLOR color)
 {
-	CUSTOMVERTEX vertices[5] = 
+		CustomVertex vertices[5] =
 	{
 		{ (float)x, (float)y, 0.0f, 1.0f, color },
 		{ (float)(x + w), (float)y, 0.0f, 1.0f, color },
@@ -74,55 +80,8 @@ void Render::Outline(LPDIRECT3DDEVICE8 pDevice, int x, int y, int w, int h, D3DC
 		{ (float)x, (float)y, 0.0f, 1.0f, color }
 	};
 
-	pDevice->SetVertexShader(D3DFVF_CUSTOMVERTEX);
-	pDevice->DrawPrimitiveUP(D3DPT_LINESTRIP, 4, vertices, sizeof(CUSTOMVERTEX));
-}
-
-void Render::Line(LPDIRECT3DDEVICE8 pDevice, int x, int y, int x2, int y2, D3DCOLOR color)
-{
-	CUSTOMVERTEX vertices[2] = 
-	{
-		{ (float)x, (float)y, 0.0f, 1.0f, color },
-		{ (float)x2, (float)y2, 0.0f, 1.0f, color }
-	};
-
-	pDevice->SetVertexShader(D3DFVF_CUSTOMVERTEX);
-	pDevice->DrawPrimitiveUP(D3DPT_LINELIST, 1, vertices, sizeof(CUSTOMVERTEX));
-}
-
-void Render::DrawOutlinedRect(LPDIRECT3DDEVICE8 pDevice, int x, int y, int w, int h, D3DCOLOR col)
-{
-	Outline(pDevice, x, y, w, h, col);
-}
-
-void Render::DrawLine(LPDIRECT3DDEVICE8 pDevice, int x0, int y0, int x1, int y1, D3DCOLOR col)
-{
-	Line(pDevice, x0, y0, x1, y1, col);
-}
-
-void Render::Polygon(LPDIRECT3DDEVICE8 pDevice, int count, CUSTOMVERTEX* Vertexs, D3DCOLOR color)
-{
-	pDevice->SetVertexShader(D3DFVF_CUSTOMVERTEX);
-	pDevice->DrawPrimitiveUP(D3DPT_TRIANGLEFAN, count - 2, Vertexs, sizeof(CUSTOMVERTEX));
-}
-
-void Render::PolygonOutline(LPDIRECT3DDEVICE8 pDevice, int count, CUSTOMVERTEX* Vertexs, D3DCOLOR color, D3DCOLOR colorLine)
-{
-	Polygon(pDevice, count, Vertexs, color);
-	
-	for (int i = 0; i < count - 1; i++)
-	{
-		Line(pDevice, Vertexs[i].x, Vertexs[i].y, Vertexs[i + 1].x, Vertexs[i + 1].y, colorLine);
-	}
-	Line(pDevice, Vertexs[count - 1].x, Vertexs[count - 1].y, Vertexs[0].x, Vertexs[0].y, colorLine);
-}
-
-void Render::PolyLine(LPDIRECT3DDEVICE8 pDevice, int count, CUSTOMVERTEX* Vertexs, D3DCOLOR colorLine)
-{
-	for (int i = 0; i < count - 1; i++)
-	{
-		Line(pDevice, Vertexs[i].x, Vertexs[i].y, Vertexs[i + 1].x, Vertexs[i + 1].y, colorLine);
-	}
+		pDevice->SetVertexShader(kCustomVertexFvf);
+		pDevice->DrawPrimitiveUP(D3DPT_LINESTRIP, 4, vertices, sizeof(CustomVertex));
 }
 
 void Render::DrawSquare(LPDIRECT3DDEVICE8 pDevice, int x, int y, int size, D3DCOLOR color)
@@ -130,7 +89,7 @@ void Render::DrawSquare(LPDIRECT3DDEVICE8 pDevice, int x, int y, int size, D3DCO
 	if (!pDevice || size <= 0)
 		return;
 
-	CUSTOMVERTEX vertices[4] =
+		CustomVertex vertices[4] =
 	{
 		{ static_cast<float>(x), static_cast<float>(y), 0.0f, 1.0f, color },
 		{ static_cast<float>(x + size), static_cast<float>(y), 0.0f, 1.0f, color },
@@ -138,36 +97,8 @@ void Render::DrawSquare(LPDIRECT3DDEVICE8 pDevice, int x, int y, int size, D3DCO
 		{ static_cast<float>(x + size), static_cast<float>(y + size), 0.0f, 1.0f, color }
 	};
 
-	pDevice->SetVertexShader(D3DFVF_CUSTOMVERTEX);
-	pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(CUSTOMVERTEX));
-}
-
-void Render::GradientV(LPDIRECT3DDEVICE8 pDevice, int x, int y, int w, int h, D3DCOLOR c1, D3DCOLOR c2)
-{
-	CUSTOMVERTEX vertices[4] = 
-	{
-		{ (float)x, (float)y, 0.0f, 1.0f, c1 },
-		{ (float)(x + w), (float)y, 0.0f, 1.0f, c1 },
-		{ (float)x, (float)(y + h), 0.0f, 1.0f, c2 },
-		{ (float)(x + w), (float)(y + h), 0.0f, 1.0f, c2 }
-	};
-
-	pDevice->SetVertexShader(D3DFVF_CUSTOMVERTEX);
-	pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(CUSTOMVERTEX));
-}
-
-void Render::GradientH(LPDIRECT3DDEVICE8 pDevice, int x, int y, int w, int h, D3DCOLOR c1, D3DCOLOR c2)
-{
-	CUSTOMVERTEX vertices[4] = 
-	{
-		{ (float)x, (float)y, 0.0f, 1.0f, c1 },
-		{ (float)(x + w), (float)y, 0.0f, 1.0f, c2 },
-		{ (float)x, (float)(y + h), 0.0f, 1.0f, c1 },
-		{ (float)(x + w), (float)(y + h), 0.0f, 1.0f, c2 }
-	};
-
-	pDevice->SetVertexShader(D3DFVF_CUSTOMVERTEX);
-	pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(CUSTOMVERTEX));
+		pDevice->SetVertexShader(kCustomVertexFvf);
+		pDevice->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(CustomVertex));
 }
 
 void Render::Text(LPD3DXFONT pFont, int x, int y, D3DCOLOR color, const char* text, DWORD format)
@@ -224,31 +155,22 @@ void Render::TextWOutlined(LPD3DXFONT pFont, int x, int y, D3DCOLOR color, const
 
 RECT Render::GetTextSize(LPD3DXFONT pFont, const char* text)
 {
-	RECT rect;
-	pFont->DrawTextA(text, -1, &rect, DT_CALCRECT, 0xFFFFFFFF);
+	RECT rect{};
+	if (pFont && text)
+		pFont->DrawTextA(text, -1, &rect, DT_CALCRECT, 0xFFFFFFFF);
 	return rect;
-}
-
-bool Render::WorldToScreen(D3DXVECTOR3 &in, D3DXVECTOR3 &out, LPDIRECT3DDEVICE8 pDevice)
-{
-	D3DVIEWPORT8 viewport;
-	pDevice->GetViewport(&viewport);
-
-	D3DXMATRIX projection, view, world;
-	pDevice->GetTransform(D3DTS_PROJECTION, &projection);
-	pDevice->GetTransform(D3DTS_VIEW, &view);
-	pDevice->GetTransform(D3DTS_WORLD, &world);
-
-	D3DXVec3Project(&out, &in, &viewport, &projection, &view, &world);
-
-	return (out.z < 1.0f);
 }
 
 RECT Render::GetViewport(LPDIRECT3DDEVICE8 pDevice)
 {
 	D3DVIEWPORT8 viewport;
 	pDevice->GetViewport(&viewport);
-	RECT rect = { viewport.X, viewport.Y, viewport.X + viewport.Width, viewport.Y + viewport.Height };
+	RECT rect = {
+		static_cast<LONG>(viewport.X),
+		static_cast<LONG>(viewport.Y),
+		static_cast<LONG>(viewport.X + viewport.Width),
+		static_cast<LONG>(viewport.Y + viewport.Height)
+	};
 	return rect;
 }
 
@@ -263,11 +185,9 @@ void Render::Shutdown()
 		}
 	};
 
-	releaseFont(Fonts::Default);
 	releaseFont(Fonts::Menu);
 	releaseFont(Fonts::MenuBold);
 	releaseFont(Fonts::MenuText);
 	releaseFont(Fonts::MenuTabs);
-	releaseFont(Fonts::Clock);
 	releaseFont(Fonts::Tabs);
 }

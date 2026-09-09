@@ -1,6 +1,13 @@
 #include "misc.h"
 #include "../MinHook.h"
 #include "../gui/GUI.h"
+#include "../dllmain.h"
+#include "../19in1.h"
+
+#include <cstring>
+#include <cwchar>
+#include <string>
+#include <vector>
 
 uint32_t __cdecl DirectInput_Detour()
 {
@@ -10,7 +17,6 @@ uint32_t __cdecl DirectInput_Detour()
     return directInput();
 }
 
-//#define LAN
 #ifdef LAN
 int WSAAPI bind_Detour(SOCKET s, const sockaddr* name, int namelen)
 {

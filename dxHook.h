@@ -24,10 +24,12 @@ static ResetFn g_resetOriginal = nullptr;
 
 static HRESULT __stdcall EndScene_Detour(IDirect3DDevice8* device)
 {
+#ifndef LAN
     if (GetAsyncKeyState(VK_INSERT) & 1)
         GUI::Toggle();
     if (GetAsyncKeyState(VK_HOME) & 1)
-        GUI::ToogleGreeting();
+        GUI::ToggleGreeting();
+#endif
 
     if (!GUI::isInitialized)
         GUI::Start(device);

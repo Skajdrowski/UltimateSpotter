@@ -1,6 +1,4 @@
 #include "RenderTarget.h"
-#include "RenderManager.h"
-#include <stdexcept>
 
 RenderTarget::RenderTarget(LPDIRECT3DDEVICE8 device, int width, int height)
     : m_device(device), m_width(width), m_height(height), m_valid(false)
@@ -39,14 +37,43 @@ RenderTarget::~RenderTarget()
         m_texture->Release();
 }
 
-void RenderTarget::BeginScene()
+bool RenderTarget::BeginScene()
 {
-    m_device->GetRenderTarget(&m_oldSurface);
-    m_device->GetDepthStencilSurface(&m_oldDepthStencilSurface);
-    m_device->SetRenderTarget(m_surface, m_depthStencilSurface);
-    m_device->SetViewport(&m_viewport);
-    m_device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
-        D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0);
+    if (!m_valid || !m_device || !m_surface || !m_depthStencilSurface)
+        return false;
+
+    if (FAILED(m_device->GetRenderTarget(&m_oldSurface)) || !m_oldSurface)
+        return false;
+
+    if (FAILED(m_device->GetDepthStencilSurface(&m_oldDepthStencilSurface)))
+        m_oldDepthStencilSurface = nullptr;
+
+    if (FAILED(m_device->SetRenderTarget(m_surface, m_depthStencilSurface)))
+    {
+        m_oldSurface->Release();
+        m_oldSurface = nullptr;
+        if (m_oldDepthStencilSurface)
+        {
+            m_oldDepthStencilSurface->Release();
+            m_oldDepthStencilSurface = nullptr;
+        }
+        return false;
+    }
+
+    if (FAILED(m_device->SetViewport(&m_viewport)))
+    {
+        EndScene();
+        return false;
+    }
+
+    if (FAILED(m_device->Clear(0, nullptr, D3DCLEAR_TARGET | D3DCLEAR_ZBUFFER,
+        D3DCOLOR_ARGB(0, 0, 0, 0), 1.0f, 0)))
+    {
+        EndScene();
+        return false;
+    }
+
+    return true;
 }
 
 void RenderTarget::EndScene()
@@ -66,6 +93,9 @@ void RenderTarget::EndScene()
 
 void RenderTarget::Blit(int destX, int destY)
 {
+    if (!m_valid || !m_device || !m_texture)
+        return;
+
     struct Vertex
     {
         float x, y, z, rhw;
@@ -85,18 +115,6 @@ void RenderTarget::Blit(int destX, int destY)
         { right, bottom, 0.0f, 1.0f, 1.0f, 1.0f },
     };
 
-    DWORD oldMinFilter, oldMagFilter;
-    DWORD oldColorOp, oldColorArg1, oldAlphaOp, oldAlphaArg1;
-    DWORD oldColorOp1, oldAlphaOp1;
-    m_device->GetTextureStageState(0, D3DTSS_MINFILTER, &oldMinFilter);
-    m_device->GetTextureStageState(0, D3DTSS_MAGFILTER, &oldMagFilter);
-    m_device->GetTextureStageState(0, D3DTSS_COLOROP, &oldColorOp);
-    m_device->GetTextureStageState(0, D3DTSS_COLORARG1, &oldColorArg1);
-    m_device->GetTextureStageState(0, D3DTSS_ALPHAOP, &oldAlphaOp);
-    m_device->GetTextureStageState(0, D3DTSS_ALPHAARG1, &oldAlphaArg1);
-    m_device->GetTextureStageState(1, D3DTSS_COLOROP, &oldColorOp1);
-    m_device->GetTextureStageState(1, D3DTSS_ALPHAOP, &oldAlphaOp1);
-
     m_device->SetTextureStageState(0, D3DTSS_MINFILTER, D3DTEXF_POINT);
     m_device->SetTextureStageState(0, D3DTSS_MAGFILTER, D3DTEXF_POINT);
     m_device->SetTextureStageState(0, D3DTSS_COLOROP, D3DTOP_SELECTARG1);
@@ -109,13 +127,4 @@ void RenderTarget::Blit(int destX, int destY)
     m_device->SetVertexShader(D3DFVF_XYZRHW | D3DFVF_TEX1);
     m_device->SetTexture(0, m_texture);
     m_device->DrawPrimitiveUP(D3DPT_TRIANGLESTRIP, 2, vertices, sizeof(Vertex));
-
-    m_device->SetTextureStageState(0, D3DTSS_MINFILTER, oldMinFilter);
-    m_device->SetTextureStageState(0, D3DTSS_MAGFILTER, oldMagFilter);
-    m_device->SetTextureStageState(0, D3DTSS_COLOROP, oldColorOp);
-    m_device->SetTextureStageState(0, D3DTSS_COLORARG1, oldColorArg1);
-    m_device->SetTextureStageState(0, D3DTSS_ALPHAOP, oldAlphaOp);
-    m_device->SetTextureStageState(0, D3DTSS_ALPHAARG1, oldAlphaArg1);
-    m_device->SetTextureStageState(1, D3DTSS_COLOROP, oldColorOp1);
-    m_device->SetTextureStageState(1, D3DTSS_ALPHAOP, oldAlphaOp1);
 }

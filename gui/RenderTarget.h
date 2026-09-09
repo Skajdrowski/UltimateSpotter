@@ -7,13 +7,11 @@ public:
     RenderTarget(LPDIRECT3DDEVICE8 device, int width, int height);
     ~RenderTarget();
 
-    void BeginScene();
+    bool BeginScene();
     void EndScene();
     void Blit(int destX = 0, int destY = 0);
 
     bool IsValid() const { return m_valid; }
-    int Width() const { return m_width; }
-    int Height() const { return m_height; }
 
 private:
     LPDIRECT3DDEVICE8 m_device = nullptr;

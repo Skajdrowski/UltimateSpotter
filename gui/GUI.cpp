@@ -1,11 +1,12 @@
-#pragma warning(disable:4996)
-
 #include "GUI.h"
 #include "RenderTarget.h"
 #include "RenderManager.h"
+#include "../dllmain.h"
+#include "../19in1.h"
 
 #include <algorithm>
 #include <array>
+#include <limits>
 #include <string>
 #include <vector>
 
@@ -13,7 +14,33 @@ bool GUI::isVisible = false;
 bool GUI::isGreeting = true;
 bool GUI::isInitialized = false;
 
-uint32_t g_playerListScroll = 0;
+namespace
+{
+struct PromptState
+{
+    std::wstring selectedPlayer;
+    std::wstring clipboardText;
+};
+
+enum class TextFieldFocus
+{
+    None,
+    ClipboardText
+};
+
+struct FetchState
+{
+    bool hasResult = false;
+    uint32_t uid = 0;
+    uint32_t statusColor = 0xFFAAAAAA;
+    std::wstring statusMessage;
+    std::wstring displayName;
+    std::string ip;
+};
+
+std::wstring Trim(const std::wstring& text);
+
+int g_playerListScroll = 0;
 bool g_playerListDraggingScroll = false;
 int g_playerListDragMouseOffsetY = 0;
 
@@ -23,14 +50,12 @@ LPDIRECT3DDEVICE8 g_pd3dDevice = nullptr;
 DWORD g_dwOldVertexShader = 0;
 DWORD g_dwOldStateBlock = 0;
 
-bool g_isMouseCaptured = false;
 bool g_isCursorVisible = false;
 HCURSOR g_arrowCursor = nullptr;
 
-RECT g_lastClipRect = {};
-bool g_lastClipRectValid = false;
-
 DWORD g_lastGuiRedrawTick = 0;
+DWORD g_lastGreetingRedrawTick = 0;
+constexpr DWORD kRedrawIntervalMs = 34;
 
 RenderTarget* g_guiRenderTarget = nullptr;
 RenderTarget* g_greetingRenderTarget = nullptr;
@@ -46,27 +71,51 @@ constexpr size_t kPromptMaxChars = 48;
 TextFieldFocus g_activeTextField = TextFieldFocus::None;
 
 bool g_leftMouseWasDown = false;
+bool g_mousePressPending = false;
+POINT g_mousePressPosition = {};
 std::array<bool, 256> g_keyLatch{};
 
 FetchState g_fetch;
-void noFetch()
+
+void ResetFetchState()
 {
-    if (!g_fetch.hasResult)
+    g_fetch = {};
+    g_fetch.statusColor = 0xFFAAAAAA;
+    g_guiDirty = true;
+}
+
+void SetFetchStatus(D3DCOLOR color, const std::wstring& message)
+{
+    g_fetch.statusColor = color;
+    g_fetch.statusMessage = message;
+    g_guiDirty = true;
+}
+
+void SetMissingSelectionStatus()
+{
+    SetFetchStatus(0xFFAAAAAA,
+        L"Firstly choose a player from 'Player listing' before issuing anything.");
+}
+
+void SetMissingIpStatus()
+{
+    SetFetchStatus(0xFFAAAAAA, L"Selected player has no known IP address.");
+}
+
+const PlayerFetchEntry* FindPlayerEntryByUid(uint32_t uid)
+{
+    for (const auto& [name, entry] : playerToName)
     {
-        g_fetch.statusColor = 0xFFAAAAAA;
-        g_fetch.statusMessage = L" Firstly choose a player from 'Player listing' before issuing anything.";
-        g_guiDirty = true;
+        if (entry.uid == uid)
+            return &entry;
     }
+
+    return nullptr;
 }
 
 int g_currentPage = 0;
 
 static bool g_loadoutPresetDropdownOpen = false;
-
-SnapshotState g_snapshot;
-
-std::wstring g_snapshotGreetingText;
-bool g_snapshotGreetingVisible = false;
 
 bool IsGameLoading()
 {
@@ -125,6 +174,7 @@ void EnsureRenderTargets(const D3DVIEWPORT8& viewport)
             g_guiRenderTarget = nullptr;
         }
 
+        g_lastGuiRedrawTick = 0;
         g_guiDirty = true;
     }
 
@@ -140,6 +190,7 @@ void EnsureRenderTargets(const D3DVIEWPORT8& viewport)
             g_greetingRenderTarget = nullptr;
         }
 
+        g_lastGreetingRedrawTick = 0;
         g_greetingDirty = true;
     }
 
@@ -147,71 +198,8 @@ void EnsureRenderTargets(const D3DVIEWPORT8& viewport)
     g_lastViewportValid = true;
 }
 
-RECT GetViewportScreenRect(HWND focusWindow)
-{
-    RECT viewport = Render::GetViewport(g_pd3dDevice);
-    POINT topLeft{ viewport.left, viewport.top };
-    POINT bottomRight{ viewport.right, viewport.bottom };
-    ClientToScreen(focusWindow, &topLeft);
-    ClientToScreen(focusWindow, &bottomRight);
-    RECT screenRect{ topLeft.x, topLeft.y, bottomRight.x, bottomRight.y };
-    return screenRect;
-}
-
-void UpdateMouseCaptureState(bool shouldCapture)
-{
-    if (!shouldCapture || !g_pd3dDevice)
-    {
-        if (g_isMouseCaptured)
-        {
-            ClipCursor(nullptr);
-            ReleaseCapture();
-            g_isMouseCaptured = false;
-            g_lastClipRectValid = false;
-        }
-        return;
-    }
-
-    D3DDEVICE_CREATION_PARAMETERS params = {};
-    if (FAILED(g_pd3dDevice->GetCreationParameters(&params)) || !params.hFocusWindow)
-    {
-        if (g_isMouseCaptured)
-        {
-            ClipCursor(nullptr);
-            ReleaseCapture();
-            g_isMouseCaptured = false;
-            g_lastClipRectValid = false;
-        }
-        return;
-    }
-
-    const RECT clipRect = GetViewportScreenRect(params.hFocusWindow);
-
-    const bool clipChanged = !g_lastClipRectValid
-        || g_lastClipRect.left != clipRect.left
-        || g_lastClipRect.top != clipRect.top
-        || g_lastClipRect.right != clipRect.right
-        || g_lastClipRect.bottom != clipRect.bottom;
-
-    if (clipChanged)
-    {
-        ClipCursor(&clipRect);
-        g_lastClipRect = clipRect;
-        g_lastClipRectValid = true;
-    }
-
-    if (!g_isMouseCaptured)
-    {
-        SetCapture(params.hFocusWindow);
-        g_isMouseCaptured = true;
-    }
-}
-
 void UpdateCursorVisibility(bool shouldShow)
 {
-    if (!isHost)
-        return;
-
     if (g_isCursorVisible == shouldShow)
         return;
 
@@ -240,15 +228,37 @@ void SetTextFieldFocus(TextFieldFocus newFocus)
     g_keyLatch.fill(false);
 
     g_guiDirty = true;
-
-    if (newFocus == TextFieldFocus::SavedValue && g_prompt.savedInput.empty())
-        g_prompt.savedInput = g_prompt.savedValue;
 }
 
 bool IsPointInsideRect(const POINT& pt, const RECT& rect)
 {
     return pt.x >= rect.left && pt.x <= rect.right && pt.y >= rect.top && pt.y <= rect.bottom;
 }
+
+bool DrawButton(const RECT& rect, const char* label, bool hasCursorPosition, const POINT& cursorPosition,
+    bool mousePressedThisFrame, D3DCOLOR normalColor, D3DCOLOR hoverColor)
+{
+    const bool hovered = hasCursorPosition && IsPointInsideRect(cursorPosition, rect);
+    Render::Draw(g_pd3dDevice,
+        rect.left, rect.top,
+        rect.right - rect.left, rect.bottom - rect.top,
+        hovered ? hoverColor : normalColor);
+    Render::Outline(g_pd3dDevice,
+        rect.left, rect.top,
+        rect.right - rect.left, rect.bottom - rect.top,
+        0xFFFFFFFF);
+    RECT textRect = rect;
+    Render::Fonts::MenuBold->DrawTextA(label, -1, &textRect,
+        DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFFFFFFFF);
+    return mousePressedThisFrame && hovered;
+}
+
+struct CheckboxResult
+{
+    bool hovered = false;
+    bool clicked = false;
+    RECT labelRect = {};
+};
 
 void ShrinkRectToTextWidth(RECT& rect, LPD3DXFONT font, const char* text, int paddingRight)
 {
@@ -262,19 +272,87 @@ void ShrinkRectToTextWidth(RECT& rect, LPD3DXFONT font, const char* text, int pa
         rect.right = desiredRight;
 }
 
+CheckboxResult DrawCheckbox(const RECT& checkboxRect, RECT labelRect, const char* label, bool checked,
+    bool enabled, bool hasCursorPosition, const POINT& cursorPosition, bool mousePressedThisFrame)
+{
+    ShrinkRectToTextWidth(labelRect, Render::Fonts::MenuText, label, 4);
+
+    const bool hovered = hasCursorPosition
+        && (IsPointInsideRect(cursorPosition, checkboxRect) || IsPointInsideRect(cursorPosition, labelRect));
+    const bool clicked = enabled && mousePressedThisFrame && hovered;
+    const bool displayChecked = clicked ? !checked : checked;
+
+    Render::Draw(g_pd3dDevice,
+        checkboxRect.left, checkboxRect.top,
+        checkboxRect.right - checkboxRect.left, checkboxRect.bottom - checkboxRect.top,
+        !enabled ? 0xFF141414 : (hovered ? 0xFF2F4F8F : 0xFF1E1E1E));
+    Render::Outline(g_pd3dDevice,
+        checkboxRect.left, checkboxRect.top,
+        checkboxRect.right - checkboxRect.left, checkboxRect.bottom - checkboxRect.top,
+        enabled ? 0xFFFFFFFF : 0xFF666666);
+
+    if (displayChecked)
+    {
+        RECT checkRect = checkboxRect;
+        Render::Fonts::MenuTabs->DrawTextA("X", -1, &checkRect,
+            DT_VCENTER | DT_CENTER | DT_NOCLIP, enabled ? 0xFF7CFC00 : 0xFF6B6B6B);
+    }
+
+    Render::Text(Render::Fonts::MenuText,
+        labelRect.left, labelRect.top + 2,
+        enabled ? 0xFFFFFFFF : 0xFF8A8A8A,
+        label);
+
+    return { hovered, clicked, labelRect };
+}
+
+bool CopyTextToClipboard(const std::wstring& text)
+{
+    if (!OpenClipboard(nullptr))
+        return false;
+
+    if (!EmptyClipboard())
+    {
+        CloseClipboard();
+        return false;
+    }
+
+    const size_t sizeInBytes = (text.size() + 1) * sizeof(wchar_t);
+    HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, sizeInBytes);
+    if (!memory)
+    {
+        CloseClipboard();
+        return false;
+    }
+
+    void* destination = GlobalLock(memory);
+    if (!destination)
+    {
+        GlobalFree(memory);
+        CloseClipboard();
+        return false;
+    }
+
+    memcpy(destination, text.c_str(), sizeInBytes);
+    GlobalUnlock(memory);
+
+    if (!SetClipboardData(CF_UNICODETEXT, memory))
+    {
+        GlobalFree(memory);
+        CloseClipboard();
+        return false;
+    }
+
+    CloseClipboard();
+    return true;
+}
+
 bool ProcessPromptInput()
 {
-    if (g_activeTextField == TextFieldFocus::None)
+    if (g_activeTextField != TextFieldFocus::ClipboardText)
         return false;
 
-    std::wstring* activeBuffer = nullptr;
-    if (g_activeTextField == TextFieldFocus::FetchInput)
-        activeBuffer = &g_prompt.input;
-    else if (g_activeTextField == TextFieldFocus::SavedValue)
-        activeBuffer = &g_prompt.savedInput;
-
-    if (!activeBuffer)
-        return false;
+    std::wstring* activeBuffer = &g_prompt.clipboardText;
 
     bool changed = false;
     const bool shiftHeld = (GetAsyncKeyState(VK_SHIFT) & 0x8000) != 0;
@@ -345,17 +423,7 @@ bool ProcessPromptInput()
 
     handleActionKey(VK_RETURN, [&]()
         {
-            if (g_activeTextField == TextFieldFocus::FetchInput)
-            {
-                g_prompt.savedValue = g_prompt.input;
-                g_prompt.savedInput = g_prompt.savedValue;
-            }
-            else if (g_activeTextField == TextFieldFocus::SavedValue)
-            {
-                const std::wstring trimmed = Trim(g_prompt.savedInput);
-                g_prompt.savedValue = trimmed;
-                g_prompt.savedInput = trimmed;
-            }
+            g_prompt.clipboardText = Trim(g_prompt.clipboardText);
         });
 
     return changed;
@@ -370,13 +438,6 @@ std::wstring Trim(const std::wstring& text)
     return text.substr(begin, end - begin + 1);
 }
 
-std::wstring GetActivePromptText()
-{
-    if (!g_prompt.input.empty())
-        return g_prompt.input;
-    return g_prompt.savedValue;
-}
-
 bool TryParseUID(const std::wstring& text, uint32_t& outUid)
 {
     const std::wstring trimmed = Trim(text);
@@ -384,8 +445,9 @@ bool TryParseUID(const std::wstring& text, uint32_t& outUid)
         return false;
 
     wchar_t* endPtr = nullptr;
-    unsigned long value = std::wcstoul(trimmed.c_str(), &endPtr, 0);
-    if (endPtr == trimmed.c_str() || *endPtr != L'\0')
+    const unsigned long long value = std::wcstoull(trimmed.c_str(), &endPtr, 0);
+    if (endPtr == trimmed.c_str() || *endPtr != L'\0'
+        || value > (std::numeric_limits<uint32_t>::max)())
         return false;
 
     outUid = static_cast<uint32_t>(value);
@@ -394,14 +456,7 @@ bool TryParseUID(const std::wstring& text, uint32_t& outUid)
 
 void PerformInventoryFetch()
 {
-    g_fetch.hasResult = false;
-    g_fetch.uid = 0;
-    g_fetch.player = nullptr;
-    g_fetch.displayName.clear();
-    g_fetch.online = false;
-    g_fetch.ip.clear();
-    g_fetch.statusMessage.clear();
-    g_guiDirty = true;
+    ResetFetchState();
 
     const auto updateSameIpAliasStatus = [&]() -> void
         {
@@ -441,8 +496,7 @@ void PerformInventoryFetch()
             g_fetch.statusMessage = status;
         };
 
-    const std::wstring inputText = GetActivePromptText();
-    const std::wstring trimmedInput = Trim(inputText);
+    const std::wstring trimmedInput = Trim(g_prompt.selectedPlayer);
     if (trimmedInput.empty())
     {
         g_fetch.statusMessage = L"Choose player's nickname before fetching.";
@@ -464,16 +518,7 @@ void PerformInventoryFetch()
                 return false;
 
             g_fetch.uid = entry.uid;
-            g_fetch.player = entry.player;
-            if (!g_fetch.player)
-            {
-                const std::unordered_map<uint32_t, void*>::iterator invIt = uIdToPlayer.find(entry.uid);
-                if (invIt != uIdToPlayer.end())
-                    g_fetch.player = invIt->second;
-            }
-
             g_fetch.displayName = !entry.displayName.empty() ? entry.displayName : name;
-            g_fetch.online = entry.isOnline;
             if (!entry.ipAddress.empty())
                 g_fetch.ip = entry.ipAddress;
 
@@ -497,25 +542,11 @@ void PerformInventoryFetch()
     g_fetch.uid = parsedUID;
     g_fetch.displayName = trimmedInput;
 
-    const std::unordered_map<uint32_t, void*>::iterator it = uIdToPlayer.find(parsedUID);
-    if (it != uIdToPlayer.end())
-    {
-        g_fetch.player = it->second;
-        g_fetch.online = true;
-    }
-    else
-    {
-        g_fetch.player = nullptr;
-        g_fetch.online = false;
-    }
-
     for (const auto& [name, entry] : playerToName)
     {
         if (entry.uid == parsedUID)
         {
-            if (g_fetch.displayName.empty())
-                g_fetch.displayName = !entry.displayName.empty() ? entry.displayName : name;
-            g_fetch.online = entry.isOnline;
+            g_fetch.displayName = !entry.displayName.empty() ? entry.displayName : name;
             if (!entry.ipAddress.empty())
                 g_fetch.ip = entry.ipAddress;
 
@@ -526,20 +557,6 @@ void PerformInventoryFetch()
     g_fetch.hasResult = true;
     updateSameIpAliasStatus();
     g_guiDirty = true;
-}
-
-size_t ComputePlayerDirectorySignature()
-{
-    size_t signature = playerToName.size();
-    std::hash<std::wstring> wstringHash;
-    for (const auto& [name, entry] : playerToName)
-    {
-        size_t part = wstringHash(name);
-        part ^= static_cast<size_t>(entry.uid) + 0x9e3779b9 + (part << 6) + (part >> 2);
-        part ^= static_cast<size_t>(entry.isOnline);
-        signature ^= part + 0x9e3779b9 + (signature << 6) + (signature >> 2);
-    }
-    return signature;
 }
 
 void ApplyGuiRenderState()
@@ -558,23 +575,7 @@ void ApplyGuiRenderState()
     g_pd3dDevice->SetTextureStageState(1, D3DTSS_COLOROP, D3DTOP_DISABLE);
     g_pd3dDevice->SetTextureStageState(1, D3DTSS_ALPHAOP, D3DTOP_DISABLE);
 }
-
-void GUI::SnapshotGuiState(bool hasCursor, const POINT& cursorPosition, bool leftMouseDown)
-{
-    g_snapshot.hasCursor = hasCursor;
-    g_snapshot.cursor = cursorPosition;
-    g_snapshot.leftMouseDown = leftMouseDown;
-    g_snapshot.isVisible = isVisible;
-    g_snapshot.textField = g_activeTextField;
-    g_snapshot.currentPage = g_currentPage;
-    g_snapshot.playerSignature = ComputePlayerDirectorySignature();
-}
-
-void GUI::SnapshotGreetingState()
-{
-    g_snapshotGreetingText = greetBuffer;
-    g_snapshotGreetingVisible = isGreeting;
-}
+} // namespace
 
 void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POINT& cursorPosition,
     bool leftMouseDown, bool mousePressedThisFrame)
@@ -583,8 +584,6 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
         return;
 
     bool promptVisibleThisFrame = false;
-
-    const char* const checkMark = "X";
 
     if (isVisible)
     {
@@ -601,12 +600,14 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
             const int panelY = viewport.top + (screenHeight - panelSize) / 2;
 
             Render::DrawSquare(g_pd3dDevice, panelX, panelY, panelSize, 0xC8000000);
-            UpdateMouseCaptureState(false);
-
             // =====================================================
             // TOOLBAR (pages)
             // =====================================================
-            const int pageCount = 2;
+            static constexpr std::array<const char*, 2> kPageLabels{
+                "LOBBY MODERATION",
+                "PLAYER INVENTORIES"
+            };
+            const int pageCount = static_cast<int>(kPageLabels.size());
             const int toolbarH = panelSize / 14;
             const int buttonW = panelSize / pageCount;
 
@@ -637,13 +638,8 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
 
                 Render::Outline(g_pd3dDevice, btn.left, btn.top, buttonW, toolbarH, 0xFFFF0000);
 
-                static char label[24];
-                if (i == 0)
-                    sprintf(label, "LOBBY MODERATION");
-                if (i == 1)
-                    sprintf(label, "PLAYER INVENTORIES");
-
-                Render::Fonts::Tabs->DrawTextA(label, -1, &btn, DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFFFFFFFF);
+                Render::Fonts::Tabs->DrawTextA(kPageLabels[i], -1, &btn,
+                    DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFFFFFFFF);
             }
 
             const int versionPad = 2;
@@ -666,9 +662,6 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
             // =====================================================
             if (g_currentPage == 0)
             {
-                if (g_activeTextField != TextFieldFocus::None)
-                    ProcessPromptInput();
-
                 // Player list
                 const int listHeight = 360;
                 const int listHeaderH = 22;
@@ -699,49 +692,24 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     0xFFFFFFFF,
                     "Player listing");
 
-                std::vector<std::pair<std::wstring, const PlayerFetchEntry*>> playerRows;
+                std::vector<std::pair<std::wstring, PlayerFetchEntry>> playerRows;
                 playerRows.reserve(playerToName.size());
                 for (const auto& [name, entry] : playerToName)
-                    playerRows.emplace_back(name, &entry);
+                    playerRows.emplace_back(name, entry);
 
                 std::sort(playerRows.begin(), playerRows.end(),
                     [](const auto& a, const auto& b)
                     {
-                        if (a.second->uid != b.second->uid)
-                            return a.second->uid < b.second->uid;
+                        if (a.second.uid != b.second.uid)
+                            return a.second.uid < b.second.uid;
                         return a.first < b.first;
                     });
 
                 const int usableHeight = listHeight - listHeaderH - 6;
                 const int maxRows = usableHeight / listRowH;
-                const int virtualSlots = 50;
-                const int totalRows = virtualSlots;
+                const int totalRows = static_cast<int>(playerRows.size());
                 const int maxScroll = (maxRows > 0) ? (std::max)(0, totalRows - maxRows) : 0;
-
-                if (g_playerListScroll > maxScroll)
-                    g_playerListScroll = maxScroll;
-                if (g_playerListScroll < 0)
-                    g_playerListScroll = 0;
-
-                RECT listContentRect{
-                    listRect.left,
-                    listRect.top + listHeaderH,
-                    listRect.right,
-                    listRect.bottom
-                };
-
-                const bool overList = hasCursorPosition && IsPointInsideRect(cursorPosition, listContentRect);
-
-                if (mousePressedThisFrame && !leftMouseDown)
-                    g_playerListDraggingScroll = false;
-
-                if (overList)
-                {
-                    if (g_playerListScroll > maxScroll)
-                        g_playerListScroll = maxScroll;
-                    if (g_playerListScroll < 0)
-                        g_playerListScroll = 0;
-                }
+                g_playerListScroll = (std::clamp)(g_playerListScroll, 0, maxScroll);
 
                 const int scrollbarW = 10;
                 const int scrollbarPad = 4;
@@ -803,10 +771,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                         g_playerListScroll = 0;
                     }
 
-                    if (g_playerListScroll > maxScroll)
-                        g_playerListScroll = maxScroll;
-                    if (g_playerListScroll < 0)
-                        g_playerListScroll = 0;
+                    g_playerListScroll = (std::clamp)(g_playerListScroll, 0, maxScroll);
                 }
                 else if (mousePressedThisFrame && overScrollbar && !overThumb)
                 {
@@ -817,10 +782,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                         else if (cursorPosition.y > thumbRect.bottom)
                             g_playerListScroll += maxRows;
 
-                        if (g_playerListScroll > maxScroll)
-                            g_playerListScroll = maxScroll;
-                        if (g_playerListScroll < 0)
-                            g_playerListScroll = 0;
+                        g_playerListScroll = (std::clamp)(g_playerListScroll, 0, maxScroll);
                     }
                 }
 
@@ -850,13 +812,10 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     thumbRect.bottom - thumbRect.top,
                     0xFF000000);
 
-                const uint32_t totalPlayers = playerRows.size();
-                for (uint32_t localIdx = 0; localIdx < maxRows; ++localIdx)
+                for (int localIdx = 0; localIdx < maxRows; ++localIdx)
                 {
-                    const uint32_t globalIdx = g_playerListScroll + localIdx;
+                    const int globalIdx = g_playerListScroll + localIdx;
                     if (globalIdx < 0 || globalIdx >= totalRows)
-                        continue;
-                    if (globalIdx >= totalPlayers)
                         continue;
 
                     const int rowY = listRect.top + listHeaderH + localIdx * listRowH;
@@ -868,8 +827,8 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     };
 
                     const bool hovered = hasCursorPosition && IsPointInsideRect(cursorPosition, rowRect);
-                    const PlayerFetchEntry* entryPtr = playerRows[globalIdx].second;
-                    const bool isOnline = entryPtr && entryPtr->isOnline;
+                    const PlayerFetchEntry* entryPtr = &playerRows[globalIdx].second;
+                    const bool isOnline = entryPtr->isOnline;
 
                     const D3DCOLOR rowColor = hovered
                         ? 0xFF2F4F8F
@@ -883,7 +842,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                         rowColor);
 
                     std::wstring rowText = playerRows[globalIdx].first;
-                    if (entryPtr && entryPtr->uid == 1000)
+                    if (entryPtr->uid == 1000)
                         rowText += L" [Host]";
                     else
                         rowText += (isOnline ? L" [Online]" : L" [Offline]");
@@ -901,14 +860,13 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                         0xFF90EE90,
                         rowText.c_str());
 
-                    if (mousePressedThisFrame && hovered && entryPtr)
+                    if (mousePressedThisFrame && hovered)
                     {
                         const std::wstring& selectedName = entryPtr->displayName.empty()
                             ? playerRows[globalIdx].first
                             : entryPtr->displayName;
-                        g_prompt.input = selectedName;
-                        g_prompt.savedValue = selectedName;
-                        g_prompt.savedInput = selectedName;
+                        g_prompt.selectedPlayer = selectedName;
+                        g_prompt.clipboardText = selectedName;
                         SetTextFieldFocus(TextFieldFocus::None);
                         PerformInventoryFetch();
                     }
@@ -957,50 +915,27 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     y + dangerH
                 };
 
-                const bool overKick = hasCursorPosition && IsPointInsideRect(cursorPosition, kickRect);
-                const bool kickPressed = mousePressedThisFrame && overKick;
+                const bool kickPressed = DrawButton(kickRect, "KICK", hasCursorPosition, cursorPosition,
+                    mousePressedThisFrame, 0xFFFF8300, 0xFFFFA500);
                 const bool canKick = g_fetch.hasResult && g_fetch.uid != 0;
-
-                Render::Draw(g_pd3dDevice,
-                    kickRect.left, kickRect.top,
-                    dangerW, dangerH,
-                    overKick ? 0xFFFFA500 : 0xFFFF8300);
-
-                Render::Outline(g_pd3dDevice,
-                    kickRect.left, kickRect.top,
-                    dangerW, dangerH,
-                    0xFFFFFFFF);
-
-                Render::Fonts::MenuBold->DrawTextA("KICK", -1, &kickRect, DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFFFFFFFF);
 
                 if (kickPressed)
                 {
-                    std::wstring status;
-                    const PlayerFetchEntry* entry = nullptr;
-                    for (const auto& [string, value] : playerToName)
-                    {
-                        if (value.uid == g_fetch.uid)
-                        {
-                            entry = &value;
-                            break;
-                        }
-                    }
                     if (canKick)
                     {
+                        const PlayerFetchEntry* entry = FindPlayerEntryByUid(g_fetch.uid);
+                        const bool wasKnownOffline = entry && !entry->isOnline;
                         const bool result = kick(g_fetch.uid, 4);
-
-                        g_fetch.statusColor = result ? 0xFF90EE90 : 0xFFED4337;
-                        status += result ? success : fail;
-                        if (!result && !entry->isOnline)
+                        std::wstring status = result ? success : fail;
+                        if (!result && wasKnownOffline)
                             status += L" You tried to kick an offline player.";
                         else if (!result)
-                            status += L" An internal error occured.";
+                            status += L" An internal error occurred.";
 
-                        g_fetch.statusMessage = status;
-                        g_guiDirty = true;
+                        SetFetchStatus(result ? 0xFF90EE90 : 0xFFED4337, status);
                     }
                     else
-                        noFetch();
+                        SetMissingSelectionStatus();
                 }
 
                 // BAN
@@ -1011,57 +946,38 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     y + dangerH
                 };
 
-                const bool overBan = hasCursorPosition && IsPointInsideRect(cursorPosition, banRect);
-                const bool banPressed = mousePressedThisFrame && overBan;
+                const bool banPressed = DrawButton(banRect, "BAN", hasCursorPosition, cursorPosition,
+                    mousePressedThisFrame, 0xFF8B0000, 0xFFB00000);
                 const bool canBan = g_fetch.hasResult && g_fetch.uid != 0 && !g_fetch.ip.empty();
-
-                Render::Draw(g_pd3dDevice,
-                    banRect.left, banRect.top,
-                    dangerW, dangerH,
-                    overBan ? 0xFFB00000 : 0xFF8B0000);
-
-                Render::Outline(g_pd3dDevice,
-                    banRect.left, banRect.top,
-                    dangerW, dangerH,
-                    0xFFFFFFFF);
-
-                Render::Fonts::MenuBold->DrawTextA("BAN", -1, &banRect, DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFFFFFFFF);
 
                 if (banPressed)
                 {
-                    std::wstring status;
-                    const PlayerFetchEntry* entry = nullptr;
-                    for (const auto& [string, value] : playerToName)
-                    {
-                        if (value.uid == g_fetch.uid)
-                        {
-                            entry = &value;
-                            break;
-                        }
-                    }
                     if (canBan)
                     {
                         const bool newlyBanned = banIpAddress(g_fetch.ip);
-                        bool kickResult = false;
+                        std::vector<uint32_t> playersToKick;
 
                         for (const auto& [nameKey, value] : playerToName)
                         {
                             if (!value.isOnline || value.ipAddress != g_fetch.ip)
                                 continue;
 
-                            kickResult = kick(value.uid, 4);
+                            playersToKick.push_back(value.uid);
                         }
 
-                        g_fetch.statusColor = newlyBanned ? 0xFF90EE90 : 0xFFED4337;
-                        status += newlyBanned ? success : fail;
-                        if (!newlyBanned)
-                            status += L" This IP is already banned or an internal error occured.";
+                        for (const uint32_t uid : playersToKick)
+                            kick(uid, 4);
 
-                        g_fetch.statusMessage = status;
-                        g_guiDirty = true;
+                        std::wstring status = newlyBanned ? success : fail;
+                        if (!newlyBanned)
+                            status += L" This IP is already banned or an internal error occurred.";
+
+                        SetFetchStatus(newlyBanned ? 0xFF90EE90 : 0xFFED4337, status);
                     }
+                    else if (g_fetch.hasResult && g_fetch.uid != 0)
+                        SetMissingIpStatus();
                     else
-                        noFetch();
+                        SetMissingSelectionStatus();
                 }
 
                 // UNBAN
@@ -1072,54 +988,30 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     y + dangerH
                 };
 
-                const bool overUnban = hasCursorPosition && IsPointInsideRect(cursorPosition, unbanRect);
-                const bool unbanPressed = mousePressedThisFrame && overUnban;
+                const bool unbanPressed = DrawButton(unbanRect, "UNBAN", hasCursorPosition, cursorPosition,
+                    mousePressedThisFrame, 0xFF65358C, 0xFFA857EB);
                 const bool canUnban = g_fetch.hasResult && g_fetch.uid != 0 && !g_fetch.ip.empty();
-
-                Render::Draw(g_pd3dDevice,
-                    unbanRect.left, unbanRect.top,
-                    dangerW, dangerH,
-                    overUnban ? 0xFFA857EB : 0xFF65358C);
-
-                Render::Outline(g_pd3dDevice,
-                    unbanRect.left, unbanRect.top,
-                    dangerW, dangerH,
-                    0xFFFFFFFF);
-
-                Render::Fonts::MenuBold->DrawTextA("UNBAN", -1, &unbanRect, DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFFFFFFFF);
 
                 if (unbanPressed)
                 {
-                    std::wstring status;
-                    const PlayerFetchEntry* entry = nullptr;
-                    for (const auto& [string, value] : playerToName)
-                    {
-                        if (value.uid == g_fetch.uid)
-                        {
-                            entry = &value;
-                            break;
-                        }
-                    }
                     if (canUnban)
                     {
                         const bool removedBan = unBanIpAddress(g_fetch.ip);
-
-                        g_fetch.statusColor = removedBan ? 0xFF90EE90 : 0xFFED4337;
-                        status += removedBan ? success : fail;
+                        std::wstring status = removedBan ? success : fail;
                         if (!removedBan)
-                            status += L" The IP you're trying to unban wasn't banned or an internal error occured.";
+                            status += L" The IP you're trying to unban wasn't banned or an internal error occurred.";
 
-                        g_fetch.statusMessage = status;
-                        g_guiDirty = true;
+                        SetFetchStatus(removedBan ? 0xFF90EE90 : 0xFFED4337, status);
                     }
+                    else if (g_fetch.hasResult && g_fetch.uid != 0)
+                        SetMissingIpStatus();
                     else
-                        noFetch();
+                        SetMissingSelectionStatus();
                 }
                 y += dangerH + 12;
 
-                //Autobalance checkmark
+                // Autobalance
                 const int checkboxSize = 18;
-                const int checkboxLabelOffset = 28;
 
                 RECT checkboxRect{
                     panelX + padX,
@@ -1135,49 +1027,19 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     panelX + panelSize - padX,
                     y + checkboxSize
                 };
-                ShrinkRectToTextWidth(checkboxLabelRect, Render::Fonts::MenuText, autoBalanceLabel, 4);
 
-                const bool overCheckbox =
-                    hasCursorPosition &&
-                    (IsPointInsideRect(cursorPosition, checkboxRect) ||
-                        IsPointInsideRect(cursorPosition, checkboxLabelRect));
+                const CheckboxResult autoBalanceCheckbox = DrawCheckbox(
+                    checkboxRect, checkboxLabelRect, autoBalanceLabel, autoBalance, true,
+                    hasCursorPosition, cursorPosition, mousePressedThisFrame);
 
-                if (mousePressedThisFrame && overCheckbox)
+                if (autoBalanceCheckbox.clicked)
                 {
                     autoBalance = !autoBalance;
                     WritePrivateProfileStringW(L"LOBBY", L"AutoBalance", autoBalance ? L"1" : L"0", iniPath);
                     g_guiDirty = true;
                 }
 
-                Render::Draw(
-                    g_pd3dDevice,
-                    checkboxRect.left,
-                    checkboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    overCheckbox ? 0xFF2F4F8F : 0xFF1E1E1E
-                );
-                Render::Outline(
-                    g_pd3dDevice,
-                    checkboxRect.left,
-                    checkboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    0xFFFFFFFF
-                );
-                if (autoBalance)
-                    Render::Fonts::MenuTabs->DrawTextA(checkMark, -1, &checkboxRect,
-                        DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFF7CFC00);
-
-                Render::Text(
-                    Render::Fonts::MenuText,
-                    checkboxLabelRect.left,
-                    checkboxLabelRect.top + 2,
-                    0xFFFFFFFF,
-                    autoBalanceLabel
-                );
-
-                // Enable 19in1 checkmark
+                // Enable 19in1
                 RECT enableMapsCheckboxRect{
                     panelX + panelSize / 2,
                     y,
@@ -1192,14 +1054,12 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     panelX + panelSize - padX,
                     y + checkboxSize
                 };
-                ShrinkRectToTextWidth(enableMapsCheckboxLabelRect, Render::Fonts::MenuText, enableMapsLabel, 4);
 
-                const bool overEnableMapsCheckbox =
-                    hasCursorPosition &&
-                    (IsPointInsideRect(cursorPosition, enableMapsCheckboxRect) ||
-                        IsPointInsideRect(cursorPosition, enableMapsCheckboxLabelRect));
+                const CheckboxResult enableMapsCheckbox = DrawCheckbox(
+                    enableMapsCheckboxRect, enableMapsCheckboxLabelRect, enableMapsLabel, unlockMaps, true,
+                    hasCursorPosition, cursorPosition, mousePressedThisFrame);
 
-                if (mousePressedThisFrame && overEnableMapsCheckbox)
+                if (enableMapsCheckbox.clicked)
                 {
                     unlockMaps = !unlockMaps;
                     listMaps();
@@ -1207,40 +1067,12 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     g_guiDirty = true;
                 }
 
-                Render::Draw(
-                    g_pd3dDevice,
-                    enableMapsCheckboxRect.left,
-                    enableMapsCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    overEnableMapsCheckbox ? 0xFF2F4F8F : 0xFF1E1E1E
-                );
-                Render::Outline(
-                    g_pd3dDevice,
-                    enableMapsCheckboxRect.left,
-                    enableMapsCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    0xFFFFFFFF
-                );
-                if (unlockMaps)
-                    Render::Fonts::MenuTabs->DrawTextA(checkMark, -1, &enableMapsCheckboxRect,
-                        DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFF7CFC00);
-
-                Render::Text(
-                    Render::Fonts::MenuText,
-                    enableMapsCheckboxLabelRect.left,
-                    enableMapsCheckboxLabelRect.top + 2,
-                    0xFFFFFFFF,
-                    enableMapsLabel
-                );
-
-                if (overEnableMapsCheckbox)
+                if (enableMapsCheckbox.hovered)
                 {
                     Render::Text(
                         Render::Fonts::MenuText,
-                        enableMapsCheckboxLabelRect.left,
-                        enableMapsCheckboxLabelRect.top - 2 - checkboxSize,
+                        enableMapsCheckbox.labelRect.left,
+                        enableMapsCheckbox.labelRect.top - 2 - checkboxSize,
                         0xFFAAAAAA,
                         "Toggle this only if you have 19in1 installed!"
                     );
@@ -1248,7 +1080,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
 
                 y += checkboxSize + 8;
 
-                // Anti OOB checkmark
+                // Anti OOB
                 RECT antiCheckboxRect{
                     panelX + padX,
                     y,
@@ -1263,60 +1095,30 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     panelX + panelSize / 2 - 10,
                     y + checkboxSize
                 };
-                ShrinkRectToTextWidth(antiCheckboxLabelRect, Render::Fonts::MenuText, antiOobLabel, 4);
 
-                const bool overAntiCheckbox =
-                    hasCursorPosition &&
-                    (IsPointInsideRect(cursorPosition, antiCheckboxRect) ||
-                        IsPointInsideRect(cursorPosition, antiCheckboxLabelRect));
+                const CheckboxResult antiCheckbox = DrawCheckbox(
+                    antiCheckboxRect, antiCheckboxLabelRect, antiOobLabel, antiOOB, true,
+                    hasCursorPosition, cursorPosition, mousePressedThisFrame);
 
-                if (mousePressedThisFrame && overAntiCheckbox)
+                if (antiCheckbox.clicked)
                 {
                     antiOOB = !antiOOB;
                     WritePrivateProfileStringW(L"LOBBY", L"AntiOOB", antiOOB ? L"1" : L"0", iniPath);
                     g_guiDirty = true;
                 }
 
-                Render::Draw(
-                    g_pd3dDevice,
-                    antiCheckboxRect.left,
-                    antiCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    overAntiCheckbox ? 0xFF2F4F8F : 0xFF1E1E1E
-                );
-                Render::Outline(
-                    g_pd3dDevice,
-                    antiCheckboxRect.left,
-                    antiCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    0xFFFFFFFF
-                );
-                if (antiOOB)
-                    Render::Fonts::MenuTabs->DrawTextA(checkMark, -1, &antiCheckboxRect,
-                        DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFF7CFC00);
-
-                Render::Text(
-                    Render::Fonts::MenuText,
-                    antiCheckboxLabelRect.left,
-                    antiCheckboxLabelRect.top + 2,
-                    0xFFFFFFFF,
-                    antiOobLabel
-                );
-
-                if (overAntiCheckbox)
+                if (antiCheckbox.hovered)
                 {
                     Render::Text(
                         Render::Fonts::MenuText,
-                        antiCheckboxLabelRect.left,
-                        antiCheckboxLabelRect.top + 2 + checkboxSize,
+                        antiCheckbox.labelRect.left,
+                        antiCheckbox.labelRect.top + 2 + checkboxSize,
                         0xFFAAAAAA,
                         "Prevents players from entering inaccessible areas"
                     );
                 }
 
-                // Custom spawns checkmark
+                // Custom spawns
                 RECT customSpawnsCheckboxRect{
                     panelX + panelSize / 2,
                     y,
@@ -1331,55 +1133,25 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     panelX + panelSize - padX,
                     y + checkboxSize
                 };
-                ShrinkRectToTextWidth(customSpawnsCheckboxLabelRect, Render::Fonts::MenuText, customSpawnsLabel, 4);
+                const bool customSpawnsAvailable = curLevel && strcmp(curLevel, "ntend.pc") == 0;
+                const CheckboxResult customSpawnsCheckbox = DrawCheckbox(
+                    customSpawnsCheckboxRect, customSpawnsCheckboxLabelRect, customSpawnsLabel,
+                    customSpawns, customSpawnsAvailable,
+                    hasCursorPosition, cursorPosition, mousePressedThisFrame);
 
-                const bool overCustomSpawnsCheckbox =
-                    hasCursorPosition &&
-                    (IsPointInsideRect(cursorPosition, customSpawnsCheckboxRect) ||
-                        IsPointInsideRect(cursorPosition, customSpawnsCheckboxLabelRect));
-                const bool customSpawnsAvailable = strcmp(curLevel, "ntend.pc") == 0;
-
-                if (mousePressedThisFrame && overCustomSpawnsCheckbox && customSpawnsAvailable)
+                if (customSpawnsCheckbox.clicked)
                 {
                     customSpawns = !customSpawns;
                     WritePrivateProfileStringW(L"LOBBY", L"CustomSpawns", customSpawns ? L"1" : L"0", iniPath);
                     g_guiDirty = true;
                 }
 
-                Render::Draw(
-                    g_pd3dDevice,
-                    customSpawnsCheckboxRect.left,
-                    customSpawnsCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    !customSpawnsAvailable ? 0xFF141414 : (overCustomSpawnsCheckbox ? 0xFF2F4F8F : 0xFF1E1E1E)
-                );
-                Render::Outline(
-                    g_pd3dDevice,
-                    customSpawnsCheckboxRect.left,
-                    customSpawnsCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    !customSpawnsAvailable ? 0xFF666666 : 0xFFFFFFFF
-                );
-                if (customSpawns)
-                    Render::Fonts::MenuTabs->DrawTextA(checkMark, -1, &customSpawnsCheckboxRect,
-                        DT_VCENTER | DT_CENTER | DT_NOCLIP, !customSpawnsAvailable ? 0xFF6B6B6B : 0xFF7CFC00);
-
-                Render::Text(
-                    Render::Fonts::MenuText,
-                    customSpawnsCheckboxLabelRect.left,
-                    customSpawnsCheckboxLabelRect.top + 2,
-                    !customSpawnsAvailable ? 0xFF8A8A8A : 0xFFFFFFFF,
-                    customSpawnsLabel
-                );
-
-                if (overCustomSpawnsCheckbox && !customSpawnsAvailable)
+                if (customSpawnsCheckbox.hovered && !customSpawnsAvailable)
                 {
                     Render::Text(
                         Render::Fonts::MenuText,
-                        customSpawnsCheckboxLabelRect.left,
-                        customSpawnsCheckboxLabelRect.top + 2 + checkboxSize,
+                        customSpawnsCheckbox.labelRect.left,
+                        customSpawnsCheckbox.labelRect.top + 2 + checkboxSize,
                         0xFFAAAAAA,
                         "You can't toggle custom spawns while in a lobby"
                     );
@@ -1410,25 +1182,15 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                 {
                     if (overValue)
                     {
-                        SetTextFieldFocus(TextFieldFocus::SavedValue);
+                        SetTextFieldFocus(TextFieldFocus::ClipboardText);
                     }
                     else if (overSave)
                     {
-                        const std::wstring trimmed = Trim(g_prompt.savedInput);
-                        g_prompt.savedValue = trimmed;
-                        g_prompt.savedInput = trimmed;
-                        g_guiDirty = true;
-
-                        OpenClipboard(nullptr);
-                        EmptyClipboard();
-                        size_t sizeInBytes = (g_prompt.savedInput.size() + 1) * sizeof(wchar_t);
-
-                        HGLOBAL hMem = GlobalAlloc(GMEM_MOVEABLE, sizeInBytes);
-                        memcpy(GlobalLock(hMem), g_prompt.savedInput.c_str(), sizeInBytes);
-                        GlobalUnlock(hMem);
-
-                        SetClipboardData(CF_UNICODETEXT, hMem);
-                        CloseClipboard();
+                        g_prompt.clipboardText = Trim(g_prompt.clipboardText);
+                        const bool copied = CopyTextToClipboard(g_prompt.clipboardText);
+                        SetFetchStatus(
+                            copied ? 0xFF90EE90 : 0xFFED4337,
+                            copied ? L"Copied to clipboard." : L"Failed to copy to clipboard.");
 
                         SetTextFieldFocus(TextFieldFocus::None);
                     }
@@ -1438,7 +1200,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     }
                 }
 
-                const bool savedValueFocused = g_activeTextField == TextFieldFocus::SavedValue;
+                const bool savedValueFocused = g_activeTextField == TextFieldFocus::ClipboardText;
 
                 Render::Draw(g_pd3dDevice,
                     valueRect.left, valueRect.top,
@@ -1452,8 +1214,8 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     bottomH,
                     savedValueFocused ? 0xFF6AA4FF : 0xFF888888);
 
-                const bool showValuePlaceholder = g_prompt.savedInput.empty() && !savedValueFocused;
-                const std::wstring valueText = showValuePlaceholder ? L"Type value to save..." : g_prompt.savedInput;
+                const bool showValuePlaceholder = g_prompt.clipboardText.empty() && !savedValueFocused;
+                const std::wstring valueText = showValuePlaceholder ? L"Type value to save..." : g_prompt.clipboardText;
 
                 Render::TextW(Render::Fonts::MenuText,
                     valueRect.left + 6,
@@ -1531,8 +1293,6 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     "No explosives"
                 };
 
-                if (g_selectedLoadoutPresetIndex < 0)
-                    g_selectedLoadoutPresetIndex = 0;
                 if (g_selectedLoadoutPresetIndex >= kLoadoutPresets.size())
                     g_selectedLoadoutPresetIndex = kLoadoutPresets.size() - 1;
 
@@ -1670,9 +1430,8 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                 }
                 y += 4;
 
-                // Knife checkmark
+                // Knife
                 const int checkboxSize = 18;
-                const int checkboxLabelOffset = 28;
 
                 RECT knifeCheckboxRect{
                     panelX + padX,
@@ -1688,47 +1447,17 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                     panelX + panelSize - padX,
                     y + checkboxSize
                 };
-                ShrinkRectToTextWidth(knifeCheckboxLabelRect, Render::Fonts::MenuText, knifeLabel, 4);
 
-                const bool overCheckbox =
-                    hasCursorPosition &&
-                    (IsPointInsideRect(cursorPosition, knifeCheckboxRect) ||
-                        IsPointInsideRect(cursorPosition, knifeCheckboxLabelRect));
+                const CheckboxResult knifeCheckbox = DrawCheckbox(
+                    knifeCheckboxRect, knifeCheckboxLabelRect, knifeLabel, g_everyoneHasKnife, true,
+                    hasCursorPosition, cursorPosition, mousePressedThisFrame);
 
-                if (mousePressedThisFrame && overCheckbox)
+                if (knifeCheckbox.clicked)
                 {
                     g_everyoneHasKnife = !g_everyoneHasKnife;
                     WritePrivateProfileStringW(L"INVENTORIES", L"EveryOneKnife", g_everyoneHasKnife ? L"1" : L"0", iniPath);
                     g_guiDirty = true;
                 }
-
-                Render::Draw(
-                    g_pd3dDevice,
-                    knifeCheckboxRect.left,
-                    knifeCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    overCheckbox ? 0xFF2F4F8F : 0xFF1E1E1E
-                );
-                Render::Outline(
-                    g_pd3dDevice,
-                    knifeCheckboxRect.left,
-                    knifeCheckboxRect.top,
-                    checkboxSize,
-                    checkboxSize,
-                    0xFFFFFFFF
-                );
-                if (g_everyoneHasKnife)
-                    Render::Fonts::MenuTabs->DrawTextA(checkMark, -1, &knifeCheckboxRect,
-                        DT_VCENTER | DT_CENTER | DT_NOCLIP, 0xFF7CFC00);
-
-                Render::Text(
-                    Render::Fonts::MenuText,
-                    knifeCheckboxLabelRect.left,
-                    knifeCheckboxLabelRect.top + 2,
-                    0xFFFFFFFF,
-                    knifeLabel
-                );
             }
 
             promptVisibleThisFrame = true;
@@ -1755,52 +1484,20 @@ void GUI::DrawGreetingContent()
             "To enable menu, hit INSERT\nTo disable this fancy text, hit HOME", 0xFF000000);
 }
 
-bool GUI::ShouldRedrawGui(bool hasCursorPosition, const POINT& cursorPosition, bool leftMouseDown, bool textChanged)
+bool GUI::ShouldRedrawGui()
 {
-    if (g_guiDirty)
+    if (g_lastGuiRedrawTick == 0)
         return true;
 
-    if (g_snapshot.hasCursor != hasCursorPosition)
-        return true;
-
-    if (hasCursorPosition && (g_snapshot.cursor.x != cursorPosition.x || g_snapshot.cursor.y != cursorPosition.y))
-    {
-        const DWORD now = GetTickCount();
-        if (now - g_lastGuiRedrawTick >= 33)
-            return true;
-    }
-
-    if (g_snapshot.leftMouseDown != leftMouseDown)
-        return true;
-
-    if (textChanged)
-        return true;
-
-    if (g_snapshot.isVisible != isVisible)
-        return true;
-
-    if (g_snapshot.textField != g_activeTextField
-        || g_snapshot.currentPage != g_currentPage)
-        return true;
-
-    if (g_snapshot.playerSignature != ComputePlayerDirectorySignature())
-        return true;
-
-    return false;
+    return GetTickCount() - g_lastGuiRedrawTick >= kRedrawIntervalMs;
 }
 
 bool GUI::ShouldRedrawGreeting()
 {
-    if (g_greetingDirty)
+    if (g_lastGreetingRedrawTick == 0)
         return true;
 
-    if (g_snapshotGreetingVisible != isGreeting)
-        return true;
-
-    if (g_snapshotGreetingText != greetBuffer)
-        return true;
-
-    return false;
+    return GetTickCount() - g_lastGreetingRedrawTick >= kRedrawIntervalMs;
 }
 
 bool GUI::GetCursorPosition(POINT& cursorViewport)
@@ -1820,8 +1517,8 @@ bool GUI::GetCursorPosition(POINT& cursorViewport)
         return false;
 
     const RECT viewport = Render::GetViewport(g_pd3dDevice);
-    cursorViewport.x = viewport.left + cursorScreen.x;
-    cursorViewport.y = viewport.top + cursorScreen.y;
+    cursorViewport.x = cursorScreen.x - viewport.left;
+    cursorViewport.y = cursorScreen.y - viewport.top;
     return true;
 }
 
@@ -1835,23 +1532,30 @@ void GUI::Start(LPDIRECT3DDEVICE8 device)
     CreateStateBlock();
     Render::Initialise(g_pd3dDevice);
     isInitialized = true;
+    g_lastGuiRedrawTick = 0;
+    g_lastGreetingRedrawTick = 0;
     g_guiDirty = true;
     g_greetingDirty = true;
 }
 
 void GUI::Render()
 {
-    if (!isInitialized || !isVisible || !g_pd3dDevice)
+    if (!isHost && isVisible)
+    {
+        isVisible = false;
+        ResetFetchState();
+        SetTextFieldFocus(TextFieldFocus::None);
+    }
+
+    if (!isInitialized || !isVisible || !g_pd3dDevice || !isHost)
     {
         UpdateCursorVisibility(false);
-        UpdateMouseCaptureState(false);
         return;
     }
 
     if (IsGameLoading())
     {
         UpdateCursorVisibility(false);
-        UpdateMouseCaptureState(false);
         return;
     }
 
@@ -1861,7 +1565,6 @@ void GUI::Render()
     if (!g_dwOldStateBlock)
     {
         UpdateCursorVisibility(false);
-        UpdateMouseCaptureState(false);
         return;
     }
 
@@ -1878,12 +1581,16 @@ void GUI::Render()
     const bool hasCursorPosition = GetCursorPosition(cursorPosition);
     const bool leftMouseDown = (GetAsyncKeyState(VK_LBUTTON) & 0x8000) != 0;
     const bool mousePressedThisFrame = leftMouseDown && !g_leftMouseWasDown;
+    if (mousePressedThisFrame && hasCursorPosition)
+    {
+        g_mousePressPending = true;
+        g_mousePressPosition = cursorPosition;
+    }
 
-    bool textChanged = false;
     if (isVisible && g_currentPage == 0 && g_activeTextField != TextFieldFocus::None)
-        textChanged = ProcessPromptInput();
+        ProcessPromptInput();
 
-    const bool shouldRedraw = ShouldRedrawGui(hasCursorPosition, cursorPosition, leftMouseDown, textChanged);
+    const bool shouldRedraw = ShouldRedrawGui();
     UpdateCursorVisibility(isVisible);
 
     g_pd3dDevice->CaptureStateBlock(g_dwOldStateBlock);
@@ -1893,16 +1600,28 @@ void GUI::Render()
 
     if (shouldRedraw)
     {
-        g_lastGuiRedrawTick = GetTickCount();
         D3DVIEWPORT8 oldViewport = viewport;
-        g_guiRenderTarget->BeginScene();
-        DrawGuiContent(Render::GetViewport(g_pd3dDevice), hasCursorPosition, cursorPosition,
-            leftMouseDown, mousePressedThisFrame);
-        g_guiRenderTarget->EndScene();
+        const bool sceneStarted = g_guiRenderTarget->BeginScene();
+        if (sceneStarted)
+        {
+            const POINT interactionCursor = g_mousePressPending ? g_mousePressPosition : cursorPosition;
+            const bool hasInteractionCursor = g_mousePressPending || hasCursorPosition;
+            DrawGuiContent(Render::GetViewport(g_pd3dDevice), hasInteractionCursor, interactionCursor,
+                leftMouseDown, g_mousePressPending);
+            g_guiRenderTarget->EndScene();
+        }
         g_pd3dDevice->SetViewport(&oldViewport);
 
-        g_guiDirty = false;
-        SnapshotGuiState(hasCursorPosition, cursorPosition, leftMouseDown);
+        if (sceneStarted)
+        {
+            g_lastGuiRedrawTick = GetTickCount();
+            g_mousePressPending = false;
+            g_guiDirty = false;
+        }
+        else
+        {
+            g_guiDirty = true;
+        }
     }
 
     g_guiRenderTarget->Blit(static_cast<int>(viewport.X), static_cast<int>(viewport.Y));
@@ -1915,7 +1634,7 @@ void GUI::Render()
 
 void GUI::RenderGreeting()
 {
-    if (!isInitialized || !g_pd3dDevice || !isGreeting || IsGameLoading())
+    if (!isInitialized || !g_pd3dDevice || !isGreeting || !isHost || IsGameLoading())
         return;
 
     if (!g_dwOldStateBlock)
@@ -1943,13 +1662,23 @@ void GUI::RenderGreeting()
     if (shouldRedraw)
     {
         D3DVIEWPORT8 oldViewport = viewport;
-        g_greetingRenderTarget->BeginScene();
-        DrawGreetingContent();
-        g_greetingRenderTarget->EndScene();
+        const bool sceneStarted = g_greetingRenderTarget->BeginScene();
+        if (sceneStarted)
+        {
+            DrawGreetingContent();
+            g_greetingRenderTarget->EndScene();
+        }
         g_pd3dDevice->SetViewport(&oldViewport);
 
-        g_greetingDirty = false;
-        SnapshotGreetingState();
+        if (sceneStarted)
+        {
+            g_lastGreetingRedrawTick = GetTickCount();
+            g_greetingDirty = false;
+        }
+        else
+        {
+            g_greetingDirty = true;
+        }
     }
 
     g_greetingRenderTarget->Blit(static_cast<int>(viewport.X), static_cast<int>(viewport.Y));
@@ -1962,7 +1691,6 @@ void GUI::Shutdown()
 {
     Render::Shutdown();
 
-    UpdateMouseCaptureState(false);
     UpdateCursorVisibility(false);
 
     g_arrowCursor = nullptr;
@@ -2006,6 +1734,8 @@ void GUI::OnDeviceReset(LPDIRECT3DDEVICE8 device)
     CreateStateBlock();
     Render::Initialise(g_pd3dDevice);
     isInitialized = true;
+    g_lastGuiRedrawTick = 0;
+    g_lastGreetingRedrawTick = 0;
     g_guiDirty = true;
     g_greetingDirty = true;
 }
@@ -2020,20 +1750,12 @@ void GUI::Toggle()
 
     if (!isVisible)
     {
-        UpdateMouseCaptureState(false);
         UpdateCursorVisibility(false);
-
-        g_fetch.hasResult = false;
-        g_fetch.uid = 0;
-        g_fetch.player = nullptr;
-        g_fetch.displayName.clear();
-        g_fetch.online = false;
-        g_fetch.ip.clear();
-        g_fetch.statusMessage.clear();
+        ResetFetchState();
     }
 }
 
-void GUI::ToogleGreeting()
+void GUI::ToggleGreeting()
 {
     if (!isHost)
         return;

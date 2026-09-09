@@ -1,46 +1,5 @@
 #pragma once
 #include "../dxsdk/include/d3d8.h"
-#include "../dllmain.h"
-#include "../19in1.h"
-
-struct PromptState
-{
-    std::wstring input;
-    std::wstring savedValue;
-    std::wstring savedInput;
-};
-
-enum class TextFieldFocus
-{
-    None,
-    FetchInput,
-    SavedValue
-};
-
-struct FetchState
-{
-    bool hasResult = false;
-    uint32_t uid = 0;
-    void* player = nullptr;
-    uint32_t statusColor = 0xFFAAAAAA;
-    std::wstring statusMessage;
-    std::wstring displayName;
-    bool online = false;
-    std::string ip;
-};
-
-struct SnapshotState
-{
-    bool hasCursor = false;
-    POINT cursor = {};
-    bool leftMouseDown = false;
-    bool isVisible = false;
-    TextFieldFocus textField = TextFieldFocus::None;
-    int currentPage = 0;
-    size_t playerSignature = 0;
-};
-
-static std::wstring Trim(const std::wstring& text);
 
 class GUI
 {
@@ -61,7 +20,7 @@ public:
 
     // Toggles the GUI's visibility
     static void Toggle();
-    static void ToogleGreeting();
+    static void ToggleGreeting();
 
     // Returns true if the GUI is currently visible
     static bool isVisible;
@@ -70,16 +29,12 @@ public:
     // Returns true when the GUI has been initialized with a valid device
     static bool isInitialized;
 
-    // Retrieves the current mouse cursor position mapped into the Direct3D viewport space
+private:
     static bool GetCursorPosition(POINT& cursorViewport);
-
     static void DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POINT& cursorPosition,
         bool leftMouseDown, bool mousePressedThisFrame);
     static void DrawGreetingContent();
 
-    static void SnapshotGuiState(bool hasCursor, const POINT& cursorPosition, bool leftMouseDown);
-    static void SnapshotGreetingState();
-
-    static bool ShouldRedrawGui(bool hasCursorPosition, const POINT& cursorPosition, bool leftMouseDown, bool textChanged);
+    static bool ShouldRedrawGui();
     static bool ShouldRedrawGreeting();
 };
