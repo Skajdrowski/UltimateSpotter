@@ -3,56 +3,38 @@
 #include "../MinHook.h"
 #include <vector>
 
-static std::vector<void*> injectedSpawnPoints = {};
-static bool IsInjectedSpawnPoint(void* sp)
+static std::vector<SnipeSpawnPoint*> injectedSpawnPoints = {};
+static bool IsInjectedSpawnPoint(const SnipeSpawnPoint* sp)
 {
-    const uint32_t uid = *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(sp) + spawnPointOffset);
-    return (uid & 0xFFF00000u) == 0x06900000u;
-}
-
-bool __fastcall SpawnPointEligible_Detour(void* self, void* /*edx*/, void* actor)
-{
-    if (IsInjectedSpawnPoint(self))
-    {
-        float& cooldown = *reinterpret_cast<float*>(reinterpret_cast<char*>(self) + spawnCooldownOffset);
-        if (cooldown < 5.0f)
-            cooldown = 69.0f;
-    }
-    return spawnPointEligible(self, actor);
+    for (SnipeSpawnPoint* injected : injectedSpawnPoints)
+        if (injected == sp)
+            return true;
+    return false;
 }
 
 #ifdef DEBUG_LOGGING
-static void PrintSpawnPoint(const char* tag, void* sp)
+static void PrintSpawnPoint(const char* tag, const SnipeSpawnPoint* spawnPoint)
 {
-    const uint32_t uid = *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(sp) + spawnPointOffset);
-    const float x = *reinterpret_cast<float*>(reinterpret_cast<char*>(sp) + spawnPosXOffset);
-    const float y = *reinterpret_cast<float*>(reinterpret_cast<char*>(sp) + spawnPosYOffset);
-    const float z = *reinterpret_cast<float*>(reinterpret_cast<char*>(sp) + spawnPosZOffset);
-    const uint32_t posture = *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(sp) + spawnPostureOffset);
-    const uint32_t teamMask = *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(sp) + spawnTeamOffset);
-    const uint32_t modeMask = *reinterpret_cast<uint32_t*>(reinterpret_cast<char*>(sp) + spawnGameModeOffset);
-
     printf("%s sp=0x%p uid=0x%08X inj=%d pos=(%.3f, %.3f, %.3f) posture=0x%X team=0x%X mode=0x%X\n",
         tag,
-        sp,
-        uid,
-        IsInjectedSpawnPoint(sp) ? 1 : 0,
-        x, y, z,
-        posture,
-        teamMask,
-        modeMask);
+        spawnPoint,
+        spawnPoint->uid,
+        IsInjectedSpawnPoint(spawnPoint) ? 1 : 0,
+        spawnPoint->positionX, spawnPoint->positionY, spawnPoint->positionZ,
+        spawnPoint->posture,
+        spawnPoint->teamMask,
+        spawnPoint->gameModeMask);
 }
 #endif
 
-double __cdecl SpawnPointScore_Detour(void* spawnPoint, void* actor)
+double __cdecl SpawnPointScore_Detour(SnipeSpawnPoint* spawnPoint, void* actor)
 {
     const double base = spawnPointScore(spawnPoint, actor);
     if (IsInjectedSpawnPoint(spawnPoint))
     {
         const double boosted = clamp(base * 1.5, 0.5, 1.0);
 #ifdef DEBUG_LOGGING
-        printf("[SPAWN_SCORE] injected base=%.6f boosted=%.6f\n", base, boosted);
-        PrintSpawnPoint("[SPAWN_SCORE]", spawnPoint);
+        printf("[SPAWN_SCORE] uid=0x%08X injected base=%.6f boosted=%.6f\n", spawnPoint->uid, base, boosted);
 #endif
         return boosted;
     }
@@ -67,24 +49,72 @@ double __cdecl SpawnPointScore_Detour(void* spawnPoint, void* actor)
 }
 
 const std::vector<spawnCoords> fuelDumpSpawns = {
-    { 107.83f, -6.45f, -89.65f, russiaSpawn, crouch },
-    { 257.87f, 9.7f, -137.52f, germanySpawn, crouch }
+    { 107.83f, -6.45f, -89.65f, russiaSpawn, crouch, 120.f },
+    { 257.87f, 9.7f, -137.52f, germanySpawn, crouch, -60.f }
 };
 const std::vector<spawnCoords> ubahnSpawns = {
-    { -55.64f, -15.5f, -71.16f, russiaSpawn, prone },
-    { 76.52f, -15.2f, -80.22f, germanySpawn, prone },
-    { -37.73f, -15.5f, 54.42f, russiaSpawn, prone },
-    { 40.64f, -15.71f, -39.19f, germanySpawn, prone }
+    { -55.64f, -15.5f, -71.16f, russiaSpawn, prone, 90.f },
+    { 76.52f, -15.2f, -80.22f, germanySpawn, prone, -90.f },
+    { -37.73f, -15.5f, 54.42f, russiaSpawn, prone, 180.f },
+    { 40.64f, -15.71f, -39.19f, germanySpawn, prone, -90.f }
 };
 const std::vector<spawnCoords> tempelhofSpawns = {
-    { 95.72f, -7.48f, 27.88f, russiaSpawn, stand },
-    { -98.89f, -19.11f, -40.56f, germanySpawn, prone }
+    { 95.72f, -7.48f, 27.88f, russiaSpawn, stand, -90.f },
+    { -98.89f, -19.11f, -40.56f, germanySpawn, prone, 60.f }
 };
 
 bool customSpawns = false;
 static const std::vector<spawnCoords>* activeSpawns = nullptr;
 static bool spawnsInjected = false;
-void* __fastcall SpawnPointInit_Detour(void* self, void* /*edx*/, int a2, int** a3)
+static bool spawnInjectionPending = false;
+static uint32_t asuraFileLoadDepth = 0;
+
+static void InjectPendingSpawns()
+{
+    if (!spawnInjectionPending || !activeSpawns || spawnsInjected)
+        return;
+
+    spawnInjectionPending = false;
+
+    for (const spawnCoords& entry : *activeSpawns)
+    {
+        SnipeSpawnPoint* newSpawn = static_cast<SnipeSpawnPoint*>(operatorNew(spawnPointSize));
+        if (!newSpawn)
+            continue;
+
+        newSpawn = spawnPointDefaultCtor(newSpawn);
+        if (!newSpawn)
+            continue;
+
+        newSpawn->positionX = entry.x;
+        newSpawn->positionY = entry.y;
+        newSpawn->positionZ = entry.z;
+        const Asura_Vector_3 direction = SpawnDirectionFromDegrees(entry.yawDegrees, entry.pitchDegrees);
+        newSpawn->directionX = direction.x;
+        newSpawn->directionY = direction.y;
+        newSpawn->directionZ = direction.z;
+        newSpawn->posture = entry.posture;
+        newSpawn->teamMask = entry.teamMask;
+        newSpawn->gameModeMask = 0x18;
+        injectedSpawnPoints.push_back(newSpawn);
+    }
+
+    spawnsInjected = true;
+}
+
+uint8_t __cdecl AsuraFileLoad_Detour(uint32_t fileHandle)
+{
+    ++asuraFileLoadDepth;
+    const uint8_t result = asuraFileLoad(fileHandle);
+    --asuraFileLoadDepth;
+
+    if (result && asuraFileLoadDepth == 0)
+        InjectPendingSpawns();
+
+    return result;
+}
+
+void* __fastcall SpawnPointInit_Detour(SnipeSpawnPoint* self, void* /*edx*/, int a2, int** a3)
 {
     if (customSpawns)
     {
@@ -105,56 +135,7 @@ void* __fastcall SpawnPointInit_Detour(void* self, void* /*edx*/, int a2, int** 
     void* sp = spawnPointInit(self, a2, a3);
 
     if (activeSpawns && !spawnsInjected)
-    {
-        uint32_t origuID = *(uint32_t*)((char*)sp + spawnPointOffset);
-        static uint32_t injecteduID = 0x06900000u;
-
-        static bool s_seeded = false;
-
-        if (!s_seeded)
-        {
-            s_seeded = true;
-
-            uint32_t seed = 0x6900000u | (origuID & 0xFFFFFu);
-            if (seed == 0x6900000u)
-                seed = 0x6900001u;
-
-            injecteduID = seed;
-        }
-
-        auto emitSpawn = [&](const spawnCoords entry, uint32_t modeMask, uint32_t teamMask)
-            {
-                void* newSpawn = operatorNew(spawnPointSize);
-                if (!newSpawn)
-                    return;
-
-                memcpy(newSpawn, sp, spawnPointSize);
-
-                uint32_t newuID = ++injecteduID;
-
-                *(uint32_t*)((char*)newSpawn + spawnPointOffset) = newuID;
-                *(float*)((char*)newSpawn + spawnPosXOffset) = entry.x;
-                *(float*)((char*)newSpawn + spawnPosYOffset) = entry.y;
-                *(float*)((char*)newSpawn + spawnPosZOffset) = entry.z;
-                *(uint32_t*)((char*)newSpawn + spawnPostureOffset) = entry.posture;
-
-                *(uint32_t*)((char*)newSpawn + spawnTeamOffset) = teamMask;
-                *(uint32_t*)((char*)newSpawn + spawnGameModeOffset) = modeMask;
-#ifdef DEBUG_LOGGING       
-                printf("[SPAWN] new uid=0x%08X teamMask=0x%X pos=(%.3f, %.3f, %.3f) clone=0x%p template=0x%p\n",
-                    newuID, teamMask,
-                    entry.x, entry.y, entry.z,
-                    newSpawn, sp);
-#endif
-                spawnPointInject(spawnListTable, newSpawn);
-                injectedSpawnPoints.push_back(newSpawn);
-            };
-
-        for (const auto& entry : *activeSpawns)
-            emitSpawn(entry, 0x18, entry.teamMask);
-
-        spawnsInjected = true;
-    }
+        spawnInjectionPending = true;
 
     isInHook = false;
     return sp;
@@ -164,10 +145,10 @@ void* __fastcall SpawnPointErase_Detour(void* self, void* /*edx*/, uint8_t flags
 {
     if (spawnsInjected)
     {
-        std::vector<void*> toDelete;
+        std::vector<SnipeSpawnPoint*> toDelete;
         toDelete.swap(injectedSpawnPoints);
 
-        for (void* sp : toDelete)
+        for (SnipeSpawnPoint* sp : toDelete)
         {
             if (!sp)
                 continue;
@@ -179,7 +160,13 @@ void* __fastcall SpawnPointErase_Detour(void* self, void* /*edx*/, uint8_t flags
         }
 
         activeSpawns = nullptr;
+        spawnInjectionPending = false;
         spawnsInjected = false;
+    }
+    else if (spawnInjectionPending)
+    {
+        activeSpawns = nullptr;
+        spawnInjectionPending = false;
     }
 
     return spawnPointErase(self, flags);
@@ -190,11 +177,11 @@ void hookSpawns()
     MH_CreateHook(reinterpret_cast<void*>(SpawnPointScoreAddr),
         SpawnPointScore_Detour, reinterpret_cast<void**>(&spawnPointScore));
 
-    MH_CreateHook(reinterpret_cast<void*>(SpawnPointEligibleAddr),
-        SpawnPointEligible_Detour, reinterpret_cast<void**>(&spawnPointEligible));
-
     MH_CreateHook(reinterpret_cast<void*>(SpawnPointInitAddr),
         SpawnPointInit_Detour, reinterpret_cast<void**>(&spawnPointInit));
+
+    MH_CreateHook(reinterpret_cast<void*>(AsuraFileLoadAddr),
+        AsuraFileLoad_Detour, reinterpret_cast<void**>(&asuraFileLoad));
 
     MH_CreateHook(reinterpret_cast<void*>(SpawnPointEraseAddr),
         SpawnPointErase_Detour, reinterpret_cast<void**>(&spawnPointErase));
