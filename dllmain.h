@@ -20,6 +20,9 @@ constexpr uintptr_t SpawnPointInitAddr = 0x591A40;
 constexpr uintptr_t SpawnPointEraseAddr = 0x591D20;
 constexpr uintptr_t SpawnPointEligibleAddr = 0x591700;
 constexpr uintptr_t LobbyTemplateCopyAddr = 0x4B4490;
+constexpr uintptr_t ScorePacketBuilderAddr = 0x4A8560;
+constexpr uintptr_t ScoreCursorAddr = 0x7AE790;
+constexpr uintptr_t ScoreValidSlotsAddr = 0x7AE610;
 
 extern wchar_t iniPath[260];
 extern bool isHost;

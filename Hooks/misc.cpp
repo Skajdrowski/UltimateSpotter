@@ -196,6 +196,34 @@ static int __fastcall LobbyTemplateCopy_Detour(void* thisPtr, void* edx, void* s
     return og;
 }
 
+constexpr int32_t ScoreSlotCount = 8;
+uint32_t __cdecl ScorePacketBuilder_Detour()
+{
+    int32_t& cursor = *reinterpret_cast<int32_t*>(ScoreCursorAddr);
+    const uint8_t* validSlots = reinterpret_cast<const uint8_t*>(ScoreValidSlotsAddr);
+
+    bool hasValidSlot = false;
+    for (int i = 0; i < ScoreSlotCount; i++)
+    {
+        if (validSlots[i])
+        {
+            hasValidSlot = true;
+            break;
+        }
+    }
+
+    if (!hasValidSlot)
+    {
+        cursor = 0;
+        return 0;
+    }
+
+    if (cursor < 0 || cursor >= ScoreSlotCount - 1)
+        cursor = -1;
+
+    return scorePacketBuilder();
+}
+
 void hookMisc()
 {
 #ifdef LAN
@@ -215,4 +243,7 @@ void hookMisc()
 
     MH_CreateHook(reinterpret_cast<void*>(mapListCommitAddress),
         MapListCommit_Detour, reinterpret_cast<void**>(&mapListCommit));
+
+    MH_CreateHook(reinterpret_cast<void*>(ScorePacketBuilderAddr),
+        ScorePacketBuilder_Detour, reinterpret_cast<void**>(&scorePacketBuilder));
 }

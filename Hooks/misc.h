@@ -26,3 +26,6 @@ extern void hookMisc();
 
 using LobbyTemplateCopyFn = int(__thiscall*)(void* thisPtr, void* src);
 static LobbyTemplateCopyFn lobbyTemplateCopy = nullptr;
+
+using ScorePacketBuilderFn = uint32_t(__cdecl*)();
+static ScorePacketBuilderFn scorePacketBuilder = nullptr;
