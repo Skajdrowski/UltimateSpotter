@@ -2,7 +2,6 @@
 #include "Hooks/misc.h"
 #include "Hooks/players.h"
 #include "Hooks/inventories.h"
-#include "Hooks/spawns.h"
 
 //#define DEBUG_LOGGING
 
@@ -24,6 +23,6 @@ constexpr uintptr_t ScorePacketBuilderAddr = 0x4A8560;
 constexpr uintptr_t ScoreCursorAddr = 0x7AE790;
 constexpr uintptr_t ScoreValidSlotsAddr = 0x7AE610;
 
-extern wchar_t iniPath[260];
-extern bool isHost;
-extern const char* curLevel;
+inline wchar_t iniPath[260]{};
+inline bool isHost;
+inline const char* curLevel = nullptr;

@@ -45,9 +45,6 @@
     <ClCompile Include="Hooks\players.cpp">
       <Filter>Source Files\Hooks</Filter>
     </ClCompile>
-    <ClCompile Include="Hooks\spawns.cpp">
-      <Filter>Source Files\Hooks</Filter>
-    </ClCompile>
     <ClCompile Include="19in1.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
@@ -84,9 +81,6 @@
       <Filter>Header Files\Hooks</Filter>
     </ClInclude>
     <ClInclude Include="Hooks\players.h">
-      <Filter>Header Files\Hooks</Filter>
-    </ClInclude>
-    <ClInclude Include="Hooks\spawns.h">
       <Filter>Header Files\Hooks</Filter>
     </ClInclude>
     <ClInclude Include="19in1.h">

@@ -649,7 +649,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                 panelX + panelSize - versionPad,
                 panelY + panelSize - versionPad
             };
-            Render::Fonts::MenuBold->DrawTextA("Ultimate Spotter v1.3", -1, &versionRect, DT_RIGHT | DT_BOTTOM | DT_NOCLIP, 0xFF037d50);
+            Render::Fonts::MenuBold->DrawTextA("Ultimate Spotter v1.3.1", -1, &versionRect, DT_RIGHT | DT_BOTTOM | DT_NOCLIP, 0xFF037d50);
 
             // =====================================================
             // CONTENT AREA
@@ -1115,45 +1115,6 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                         antiCheckbox.labelRect.top + 2 + checkboxSize,
                         0xFFAAAAAA,
                         "Prevents players from entering inaccessible areas"
-                    );
-                }
-
-                // Custom spawns
-                RECT customSpawnsCheckboxRect{
-                    panelX + panelSize / 2,
-                    y,
-                    panelX + panelSize / 2 + checkboxSize,
-                    y + checkboxSize
-                };
-
-                const char* const customSpawnsLabel = "Custom spawns";
-                RECT customSpawnsCheckboxLabelRect{
-                    customSpawnsCheckboxRect.right + 8,
-                    y,
-                    panelX + panelSize - padX,
-                    y + checkboxSize
-                };
-                const bool customSpawnsAvailable = curLevel && strcmp(curLevel, "ntend.pc") == 0;
-                const CheckboxResult customSpawnsCheckbox = DrawCheckbox(
-                    customSpawnsCheckboxRect, customSpawnsCheckboxLabelRect, customSpawnsLabel,
-                    customSpawns, customSpawnsAvailable,
-                    hasCursorPosition, cursorPosition, mousePressedThisFrame);
-
-                if (customSpawnsCheckbox.clicked)
-                {
-                    customSpawns = !customSpawns;
-                    WritePrivateProfileStringW(L"LOBBY", L"CustomSpawns", customSpawns ? L"1" : L"0", iniPath);
-                    g_guiDirty = true;
-                }
-
-                if (customSpawnsCheckbox.hovered && !customSpawnsAvailable)
-                {
-                    Render::Text(
-                        Render::Fonts::MenuText,
-                        customSpawnsCheckbox.labelRect.left,
-                        customSpawnsCheckbox.labelRect.top + 2 + checkboxSize,
-                        0xFFAAAAAA,
-                        "You can't toggle custom spawns while in a lobby"
                     );
                 }
 

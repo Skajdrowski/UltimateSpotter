@@ -5,9 +5,6 @@
 #include "MinHook.h"
 #include "dxHook.h"
 
-bool isHost = false;
-const char* curLevel = nullptr;
-
 static void Thread()
 {
     while (true)
@@ -39,7 +36,6 @@ static void Thread()
     }
 }
 
-wchar_t iniPath[MAX_PATH];
 static void config_init()
 {
     HMODULE hMod = NULL;
@@ -58,7 +54,6 @@ static void config_init()
     autoBalance = GetPrivateProfileIntW(L"LOBBY", L"AutoBalance", false, iniPath);
     antiOOB = GetPrivateProfileIntW(L"LOBBY", L"AntiOOB", true, iniPath);
     unlockMaps = GetPrivateProfileIntW(L"LOBBY", L"19in1", false, iniPath);
-    customSpawns = GetPrivateProfileIntW(L"LOBBY", L"CustomSpawns", false, iniPath);
 
     g_selectedLoadoutPresetIndex = GetPrivateProfileIntW(L"INVENTORIES", L"LoadoutPreset", 0, iniPath);
     g_everyoneHasKnife = GetPrivateProfileIntW(L"INVENTORIES", L"EveryOneKnife", false, iniPath);
@@ -80,7 +75,6 @@ static void Init()
     hookMisc();
     hookPlayers();
     hookInvs();
-    hookSpawns();
 
     MH_EnableHook(MH_ALL_HOOKS);
     InstallDirect3DHook();

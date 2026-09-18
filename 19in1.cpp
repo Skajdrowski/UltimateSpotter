@@ -1,7 +1,6 @@
 #include "19in1.h"
 #include <windows.h>
 #include <string.h>
-#include <stdint.h>
 
 bool unlockMaps = false;
 static bool initiallyDisabledMaps[MpMapRecordCount] = {};
@@ -16,7 +15,7 @@ void listMaps()
 
     if (!mapsInitialized)
     {
-        for (size_t i = 0; i < MpMapRecordCount; ++i)
+        for (uint8_t i = 0; i < MpMapRecordCount; i++)
         {
             uint32_t* flags = reinterpret_cast<uint32_t*>(base + i * MpMapRecordSize + MpMapRecordFlagsOffset);
             initiallyDisabledMaps[i] = (*flags & 0xFu) == 0x0u;
@@ -25,7 +24,7 @@ void listMaps()
     }
 
     if (mapsInitialized)
-        for (size_t i = 0; i < MpMapRecordCount; ++i)
+        for (uint8_t i = 0; i < MpMapRecordCount; i++)
         {
             if (!initiallyDisabledMaps[i])
                 continue;
