@@ -1074,7 +1074,7 @@ void GUI::DrawGuiContent(const RECT& viewport, bool hasCursorPosition, const POI
                         enableMapsCheckbox.labelRect.left,
                         enableMapsCheckbox.labelRect.top - 2 - checkboxSize,
                         0xFFAAAAAA,
-                        "Toggle this only if you have 19in1 installed!"
+                        "Checks if you have 19in1 installed and enables them"
                     );
                 }
 

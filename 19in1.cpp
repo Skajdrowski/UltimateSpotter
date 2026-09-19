@@ -1,10 +1,30 @@
 #include "19in1.h"
 #include <windows.h>
-#include <string.h>
+#include <shlwapi.h>
+#pragma comment(lib, "shlwapi.lib")
+#pragma warning(disable:4996)
 
 bool unlockMaps = false;
 static bool initiallyDisabledMaps[MpMapRecordCount] = {};
 static bool mapsInitialized = false;
+
+static bool mapExists(const char* name)
+{
+    wchar_t mapPath[MAX_PATH];
+    GetModuleFileNameW(nullptr, mapPath, _countof(mapPath));
+    PathRemoveFileSpecW(mapPath);
+
+    wchar_t wideName[7];
+    MultiByteToWideChar(CP_UTF8, MB_ERR_INVALID_CHARS, name, -1, wideName, _countof(wideName));
+    
+    wcscat(mapPath, L"\\Environments\\");
+    wcscat(mapPath, wideName);
+    wcscat(mapPath, L".pc");
+
+    const DWORD attributes = GetFileAttributesW(mapPath);
+    return attributes != INVALID_FILE_ATTRIBUTES && !(attributes & FILE_ATTRIBUTE_DIRECTORY);
+}
+
 void listMaps()
 {
     uint8_t* base = reinterpret_cast<uint8_t*>(MpMapTableBaseAddr);
@@ -36,11 +56,11 @@ void listMaps()
                 || strcmp(name, "mp_03e") == 0
                 || strncmp(name, "mp_07", 5) == 0
                 || strcmp(name, "mp_08c") == 0
-                )
-                continue;
+            )
+            continue;
 
             uint32_t* flags = reinterpret_cast<uint32_t*>(base + i * MpMapRecordSize + MpMapRecordFlagsOffset);
-            if (unlockMaps)
+            if (unlockMaps && mapExists(name))
                 *flags = (*flags & 0xFFFFFFF0u) | 0xFu;
             else
                 *flags = (*flags & 0xFFFFFFF0u) | 0x0u;
